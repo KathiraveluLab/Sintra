@@ -109,7 +109,8 @@ class SintraMeasurementClient:
             if not measurement_ids:
                 measurement_ids = self._get_saved_measurement_ids()
         
-        for mid in measurement_ids:
+        for measurement_id in measurement_ids:
+            print(f"Fetching ALL results for measurement {measurement_id}...")
             print(f"Fetching ALL results for measurement {mid}...")
             
             kwargs = {
