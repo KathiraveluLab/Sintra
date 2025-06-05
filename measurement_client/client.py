@@ -111,10 +111,10 @@ class SintraMeasurementClient:
         
         for measurement_id in measurement_ids:
             print(f"Fetching ALL results for measurement {measurement_id}...")
-            print(f"Fetching ALL results for measurement {mid}...")
+            print(f"Fetching ALL results for measurement {measurement_id}...")
             
             kwargs = {
-                "msm_id": mid,
+                "msm_id": measurement_id,
                 "format": "json"
             }
             
@@ -131,13 +131,13 @@ class SintraMeasurementClient:
             is_success, results = AtlasResultsRequest(**kwargs).create()
             
             if is_success:
-                print(f"Retrieved {len(results)} results for measurement {mid}")
+                print(f"Retrieved {len(results)} results for measurement {measurement_id}")
                 
-                processed_results = self._process_all_results(results, mid)
-                self._save_results(mid, processed_results)
-                print(f"Saved ALL results for measurement {mid}")
+                processed_results = self._process_all_results(results, measurement_id)
+                self._save_results(measurement_id, processed_results)
+                print(f"Saved ALL results for measurement {measurement_id}")
             else:
-                print(f"Failed to fetch results for measurement {mid}")
+                print(f"Failed to fetch results for measurement {measurement_id}")
     
     def _save_measurement_info(self, measurement_id, config, target):
         info = {
