@@ -1,0 +1,40 @@
+measurements:
+  - type: ping
+    target: google.com
+    description: "Ping measurement to Google DNS"
+    interval: 300  # seconds
+    duration_hours: 2
+    af: 4  # IPv4
+    probes:
+      area: "WW"  # Worldwide
+      count: 10
+
+  - type: ping
+    target: 8.8.8.8
+    description: "Ping measurement to Google DNS IP"
+    interval: 300
+    duration_hours: 1
+    af: 4
+    probes:
+      area: "Europe"
+      count: 5
+
+  - type: traceroute
+    target: cloudflare.com
+    description: "Traceroute to Cloudflare"
+    interval: 900  # 15 minutes
+    duration_hours: 2
+    af: 4
+    probes:
+      area: "WW"
+      count: 8
+
+  - type: ping
+    target: facebook.com
+    description: "Ping measurement to Facebook"
+    interval: 240
+    duration_hours: 1
+    af: 4
+    probes:
+      area: "North America"
+      count: 6
