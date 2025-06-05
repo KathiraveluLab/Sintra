@@ -159,7 +159,8 @@ class SintraMeasurementClient:
                     with open(info_file, 'r') as f:
                         info = json.load(f)
                         measurement_ids.append(info['measurement_id'])
-                except:
+                except json.JSONDecodeError:
+                    continue
                     continue
         return measurement_ids
     
