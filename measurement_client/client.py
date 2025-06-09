@@ -26,17 +26,25 @@ class SintraMeasurementClient:
         self.fetch_config = None
     
     def load_config(self, config_type="create"):
+        config_path = None
         try:
             if config_type == "create":
                 config_path = self.config_path or self.create_config_path
+                if config_path is None:
+                    raise ValueError("No configuration path provided for 'create' config")
                 with open(config_path, 'r') as file:
                     self.create_config = yaml.safe_load(file)
             elif config_type == "fetch":
                 config_path = self.config_path or self.fetch_config_path
+                if config_path is None:
+                    raise ValueError("No configuration path provided for 'fetch' config")
                 with open(config_path, 'r') as file:
                     self.fetch_config = yaml.safe_load(file)
             else:
-                with open(self.config_path, 'r') as file:
+                config_path = self.config_path
+                if config_path is None:
+                    raise ValueError("No configuration path provided")
+                with open(config_path, 'r') as file:
                     self.config = yaml.safe_load(file)
         except FileNotFoundError:
             raise FileNotFoundError(f"Configuration file {config_path} not found")
@@ -45,6 +53,10 @@ class SintraMeasurementClient:
         print("Creating measurements...")
         self.load_config("create")
         
+        if not self.create_config:
+            print("No create configuration loaded. Please check your config file.")
+            return
+
         for measurement_config in self.create_config.get('measurements', []):
             measurement_type = measurement_config.get('type', 'ping').lower()
             target = measurement_config['target']
@@ -88,7 +100,7 @@ class SintraMeasurementClient:
             is_success, response = atlas_request.create()
             
             if is_success:
-                measurement_id = response['measurements'][0]
+                measurement_id = response[0][0]
                 print(f"Created {measurement_type} measurement {measurement_id} for {target}")
                 
                 self._save_measurement_info(measurement_id, measurement_config, target)
@@ -104,7 +116,9 @@ class SintraMeasurementClient:
             measurement_ids = [measurement_id]
         else:
             self.load_config("fetch")
-            measurement_ids = self.fetch_config.get('measurement_ids', [])
+            measurement_ids = []
+            if self.fetch_config is not None:
+                measurement_ids = self.fetch_config.get('measurement_ids', [])
             
             if not measurement_ids:
                 measurement_ids = self._get_saved_measurement_ids()
