@@ -1,6 +1,6 @@
 measurements:
   - type: ping
-    target: google.com
+    target: meta.com
     description: "Ping measurement to Google DNS"
     interval: 300  
     duration_hours: 1
@@ -9,32 +9,25 @@ measurements:
       area: "WW"  
       count: 10
 
-  - type: ping
-    target: seekerguild.in
-    description: "Ping measurement to Google DNS IP"
-    interval: 300
-    duration_hours: 1
-    af: 4
-    probes:
-      area: "Europe"
-      count: 5
 
   - type: traceroute
     target: cloudflare.com
     description: "Traceroute to Cloudflare"
+    protocol: "ICMP"
     interval: 900  
     duration_hours: 2
-    af: 4
+    af: 6
     probes:
       area: "WW"
-      count: 8
+      count: 10
+    
 
-  - type: ping
-    target: facebook.com
-    description: "Ping measurement to Facebook"
-    interval: 240
-    duration_hours: 1
-    af: 4
-    probes:
-      area: "North America"
-      count: 6
+  # - type: ping
+  #   target: facebook.com
+  #   description: "Ping measurement to Facebook"
+  #   interval: 240
+  #   duration_hours: 1
+  #   af: 4
+  #   probes:
+  #     area: "North America"
+  #     count: 6

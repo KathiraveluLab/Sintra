@@ -1,3 +1,4 @@
+from asyncio import protocols
 import os
 import json
 import yaml
@@ -58,54 +59,65 @@ class SintraMeasurementClient:
             return
 
         for measurement_config in self.create_config.get('measurements', []):
-            measurement_type = measurement_config.get('type', 'ping').lower()
-            target = measurement_config['target']
-            probe_config = measurement_config.get('probes', {})
-            
-            if measurement_type == 'ping':
-                measurement = Ping(
-                    af=measurement_config.get('af', 4),
-                    target=target,
-                    description=measurement_config.get('description', f'Sintra ping to {target}'),
-                    interval=measurement_config.get('interval', 300)
+            try:
+                measurement_type = measurement_config.get('type', 'ping').lower()
+                target = measurement_config.get('target')
+                if not target:
+                    print("No target specified for measurement. Skipping...")
+                    continue
+                probe_config = measurement_config.get('probes', {})
+
+                if measurement_type == 'ping':
+                    measurement = Ping(
+                        af=measurement_config.get('af'),
+                        target=target,
+                        description=measurement_config.get('description', f'Sintra ping to {target}'),
+                        interval=measurement_config.get('interval')
+                    )
+                elif measurement_type == 'traceroute':
+                    protocol = measurement_config.get('protocol')
+                    if not protocol:
+                        print(f"Traceroute Measurement field: <protocol> is required for target {target}. Skipping...")
+                        continue
+                    measurement = Traceroute(
+                        af=measurement_config.get('af'),
+                        target=target,
+                        description=measurement_config.get('description', f'Sintra traceroute to {target}'),
+                        interval=measurement_config.get('interval'),
+                        protocol=protocol,
+                    )
+                else:
+                    print(f"Unsupported measurement type: {measurement_type}")
+                    continue
+
+                source = AtlasSource(
+                    type="area",
+                    value=probe_config.get('area', 'WW'),
+                    requested=probe_config.get('count', 5)
                 )
-            elif measurement_type == 'traceroute':
-                measurement = Traceroute(
-                    af=measurement_config.get('af', 4),
-                    target=target,
-                    description=measurement_config.get('description', f'Sintra traceroute to {target}'),
-                    interval=measurement_config.get('interval', 900)
+
+                start_time = datetime.utcnow() + timedelta(minutes=1)
+                stop_time = start_time + timedelta(hours=measurement_config.get('duration_hours'))
+
+                atlas_request = AtlasCreateRequest(
+                    start_time=start_time,
+                    stop_time=stop_time,
+                    key=self.api_key,
+                    measurements=[measurement],
+                    sources=[source]
                 )
-            else:
-                print(f"Unsupported measurement type: {measurement_type}")
-                continue
-            
-            source = AtlasSource(
-                type="area",
-                value=probe_config.get('area', 'WW'),
-                requested=probe_config.get('count', 5)
-            )
-            
-            start_time = datetime.utcnow() + timedelta(minutes=1)
-            stop_time = start_time + timedelta(hours=measurement_config.get('duration_hours', 1))
-            
-            atlas_request = AtlasCreateRequest(
-                start_time=start_time,
-                stop_time=stop_time,
-                key=self.api_key,
-                measurements=[measurement],
-                sources=[source]
-            )
-            
-            is_success, response = atlas_request.create()
-            
-            if is_success:
-                measurement_id = response[0][0]
-                print(f"Created {measurement_type} measurement {measurement_id} for {target}")
-                
-                self._save_measurement_info(measurement_id, measurement_config, target)
-            else:
-                print(f"Failed to create measurement for {target}: {response}")
+
+                is_success, response = atlas_request.create()
+
+                if is_success:
+                    measurement_id = response[0][0]
+                    print(f"Created {measurement_type} measurement {measurement_id} for {target}")
+
+                    self._save_measurement_info(measurement_id, measurement_config, target)
+                else:
+                    print(f"Failed to create measurement for {target}: {response}")
+            except Exception as e:
+                print(f"Error creating measurement for {measurement_config.get('target', 'unknown')}: {e}")
     
     def fetch_measurements(self, measurement_id=None):
         print("Fetching measurements...")
