@@ -176,7 +176,7 @@ class SintraMeasurementClient:
             "config": config
         }
         
-        info_file = Path(os.path.join(self.results_dir, f"Created_measurement_{measurement_id}_info.json"))
+        info_file = Path(os.path.join(self.results_dir, f"measurement_{measurement_id}_info.json"))
         with open(info_file, 'w') as f:
             json.dump(info, f, indent=2)
     
