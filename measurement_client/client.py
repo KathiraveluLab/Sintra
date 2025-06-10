@@ -96,7 +96,7 @@ class SintraMeasurementClient:
                 )
 
                 start_time = datetime.utcnow() + timedelta(minutes=1)
-                stop_time = start_time + timedelta(hours=measurement_config.get('duration_hours'))
+                stop_time = start_time + timedelta(hours=measurement_config.get('duration_hours', 1)) # Default to 1 hour if not specified
 
                 atlas_request = AtlasCreateRequest(
                     start_time=start_time,
