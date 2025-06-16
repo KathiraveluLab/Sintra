@@ -245,76 +245,63 @@ class SintraMeasurementClient:
         }
         
         for result in results:
+            # Basic probe info
             processed_result = {
                 "probe_id": result.get("prb_id"),
-                "timestamp": result.get("timestamp"),
-                "datetime": datetime.utcfromtimestamp(result.get("timestamp", 0)).isoformat() if result.get("timestamp") else None,
                 "source_address": result.get("from"),
                 "target": result.get("dst_name"),
                 "target_address": result.get("dst_addr"),
-                "protocol": result.get("proto"),
-                "af": result.get("af"),
-                "size": result.get("size"),
-                "ttl": result.get("ttl"),
-                "type": result.get("type"),
-                "raw_result": result
+                "timestamp": datetime.utcfromtimestamp(result.get("timestamp", 0)).isoformat() if result.get("timestamp") else None,
             }
             
+            # Process ping measurements
             if "result" in result and result.get("type") == "ping":
                 ping_results = result["result"]
                 rtts = []
-                successful_pings = []
-                failed_pings = []
                 
                 for ping in ping_results:
                     if ping.get("rtt") is not None:
                         rtts.append(ping["rtt"])
-                        successful_pings.append(ping)
-                    else:
-                        failed_pings.append(ping)
+                
+                failed_pings = len([r for r in ping_results if r.get("rtt") is None])
                 
                 processed_result.update({
-                    "measurement_type": "ping",
-                    "packets_sent": len(ping_results),
-                    "packets_received": len(rtts),
-                    "packet_loss_count": len(failed_pings),
-                    "packet_loss_percentage": (len(failed_pings) / len(ping_results) * 100) if ping_results else 0,
+                    "packet_loss_percentage": (failed_pings / len(ping_results) * 100) if ping_results else 0,
                     "latency_stats": {
                         "min": min(rtts) if rtts else None,
                         "max": max(rtts) if rtts else None,
                         "avg": sum(rtts) / len(rtts) if rtts else None,
-                        "median": sorted(rtts)[len(rtts)//2] if rtts else None,
-                        "all_rtts": rtts
-                    },
-                    "successful_pings": successful_pings,
-                    "failed_pings": failed_pings,
-                    "ping_results": ping_results
+                        "median": sorted(rtts)[len(rtts)//2] if rtts else None
+                    }
                 })
             
+            # Process traceroute measurements  
             elif "result" in result and result.get("type") == "traceroute":
                 traceroute_results = result["result"]
                 processed_result.update({
-                    "measurement_type": "traceroute",
-                    "hops_count": len(traceroute_results),
-                    "traceroute_hops": traceroute_results,
-                    "path_analysis": self._analyze_traceroute_path(traceroute_results)
+                    "packet_loss_percentage": 0,  # Traceroute doesn't have packet loss in same way
+                    "latency_stats": {
+                        "min": None,
+                        "max": None, 
+                        "avg": None,
+                        "median": None
+                    },
+                    "hops_count": len(traceroute_results)
                 })
             
-            elif "result" in result and result.get("type") == "dns":
-                processed_result.update({
-                    "measurement_type": "dns",
-                    "dns_results": result["result"]
-                })
-            
+            # For other measurement types
             else:
                 processed_result.update({
-                    "measurement_type": result.get("type", "unknown"),
-                    "measurement_results": result.get("result", [])
+                    "packet_loss_percentage": None,
+                    "latency_stats": {
+                        "min": None,
+                        "max": None,
+                        "avg": None, 
+                        "median": None
+                    }
                 })
             
             processed["results"].append(processed_result)
-        
-        processed["aggregated_stats"] = self._calculate_aggregated_stats(processed["results"])
         
         return processed
     
@@ -408,8 +395,7 @@ class SintraMeasurementClient:
         return stats
     
     def _save_results(self, measurement_id, processed_results):
-        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-        results_file = self.results_dir / f"measurement_{measurement_id}_results_{timestamp}.json"
+        results_file = self.results_dir / f"measurement_{measurement_id}_result.json"
         
         with open(results_file, 'w') as f:
             json.dump(processed_results, f, indent=2)

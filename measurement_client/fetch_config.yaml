@@ -1,6 +1,7 @@
 # Measurement IDs to fetch results.
 measurement_ids:
-  - 107836564
+  - 108497348
+  - 108497346
 
 fetch_settings:
   limit: 1000
