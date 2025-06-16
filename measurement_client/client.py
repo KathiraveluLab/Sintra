@@ -249,6 +249,7 @@ class SintraMeasurementClient:
             processed_result = {
                 "probe_id": result.get("prb_id"),
                 "source_address": result.get("from"),
+                "target": result.get("dst_name"),
                 "target_address": result.get("dst_addr"),
                 "timestamp": datetime.utcfromtimestamp(result.get("timestamp", 0)).isoformat() if result.get("timestamp") else None,
             }
