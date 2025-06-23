@@ -252,7 +252,12 @@ class SintraMeasurementClient:
         
         for result in results:
             # Basic probe info
-            processed_result = create_basic_result(result)
+            processed_result = {
+                "probe_id": result.get("prb_id"),
+                "source_address": result.get("from"),
+                "target_address": result.get("dst_addr"),
+                "timestamp": datetime.utcfromtimestamp(result.get("timestamp", 0)).isoformat() if result.get("timestamp") else None,
+            }
             
             # Process based on measurement type
             if "result" in result and result.get("type") == "ping":
