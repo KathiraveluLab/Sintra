@@ -1,7 +1,7 @@
 from datetime import datetime
 
 def process_ping_result(result):
-    ping_results = result["result"]
+    ping_results = result.get("result", [])
     rtts = []
     
     for ping in ping_results:
