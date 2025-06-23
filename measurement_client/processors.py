@@ -16,7 +16,7 @@ def process_ping_result(result):
             "min": min(rtts) if rtts else None,
             "max": max(rtts) if rtts else None,
             "avg": sum(rtts) / len(rtts) if rtts else None,
-            "median": sorted(rtts)[len(rtts)//2] if rtts else None
+            "median": statistics.median(rtts) if rtts else None
         }
     }
 
