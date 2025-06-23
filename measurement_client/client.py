@@ -1,4 +1,3 @@
-from asyncio import protocols
 import os
 import json
 import yaml
@@ -13,7 +12,7 @@ from ripe.atlas.cousteau import (
 from measurement_client.logger import logger
 from measurement_client.processors import (
     process_ping_result, process_traceroute_result, 
-    process_default_result, create_basic_result
+    process_default_result
 )
 
 class SintraMeasurementClient:
@@ -251,7 +250,6 @@ class SintraMeasurementClient:
         }
         
         for result in results:
-            # Basic probe info
             processed_result = {
                 "probe_id": result.get("prb_id"),
                 "source_address": result.get("from"),
