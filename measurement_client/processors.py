@@ -21,7 +21,7 @@ def process_ping_result(result):
     }
 
 def process_traceroute_result(result):
-    traceroute_results = result["result"]
+    traceroute_results = result.get("result", [])
     
     return {
         "packet_loss_percentage": 0, 
