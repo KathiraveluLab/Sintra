@@ -24,7 +24,7 @@ def process_traceroute_result(result):
     traceroute_results = result.get("result", [])
     
     return {
-        "packet_loss_percentage": 0, 
+        "packet_loss_percentage": None,
         "latency_stats": {
             "min": None,
             "max": None, 
