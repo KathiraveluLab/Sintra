@@ -1,4 +1,3 @@
-from asyncio import protocols
 import os
 import json
 import yaml
@@ -11,6 +10,10 @@ from ripe.atlas.cousteau import (
     AtlasSource
 )
 from measurement_client.logger import logger
+from measurement_client.processors import (
+    process_ping_result, process_traceroute_result, 
+    process_default_result
+)
 
 class SintraMeasurementClient:
     def __init__(self, config_path=None, create_config="measurement_client/create_config.yaml", fetch_config="measurement_client/fetch_config.yaml"):
@@ -23,6 +26,8 @@ class SintraMeasurementClient:
         self.create_config_path = create_config
         self.fetch_config_path = fetch_config
         self.results_dir = Path("measurement_client/results")
+        self.created_measurements_dir = self.results_dir / "created_measurements"
+        self.fetched_measurements_dir = self.results_dir / "fetched_measurements"
         
         self.create_config = None
         self.fetch_config = None
@@ -126,7 +131,8 @@ class SintraMeasurementClient:
     
     def fetch_measurements(self, measurement_id=None):
         logger.info("Fetching measurements...")
-        self.results_dir.mkdir(parents=True, exist_ok=True)
+        self.created_measurements_dir.mkdir(parents=True, exist_ok=True)
+        self.fetched_measurements_dir.mkdir(parents=True, exist_ok=True)
         
         if measurement_id:
             measurement_ids = [measurement_id]
@@ -176,20 +182,19 @@ class SintraMeasurementClient:
             "config": config
         }
         
-        info_file = Path(os.path.join(self.results_dir, f"measurement_{measurement_id}_info.json"))
+        info_file = self.created_measurements_dir / f"measurement_{measurement_id}_info.json"
         with open(info_file, 'w') as f:
             json.dump(info, f, indent=2)
     
     def _get_saved_measurement_ids(self):
         measurement_ids = []
-        if self.results_dir.exists():
-            for info_file in self.results_dir.glob("measurement_*_info.json"):
+        if self.created_measurements_dir.exists():
+            for info_file in self.created_measurements_dir.glob("measurement_*_info.json"):
                 try:
                     with open(info_file, 'r') as f:
                         info = json.load(f)
                         measurement_ids.append(info['measurement_id'])
                 except json.JSONDecodeError:
-                    continue
                     continue
         return measurement_ids
     
@@ -245,61 +250,20 @@ class SintraMeasurementClient:
         }
         
         for result in results:
-            # Basic probe info
             processed_result = {
                 "probe_id": result.get("prb_id"),
                 "source_address": result.get("from"),
-                "target": result.get("dst_name"),
                 "target_address": result.get("dst_addr"),
                 "timestamp": datetime.utcfromtimestamp(result.get("timestamp", 0)).isoformat() if result.get("timestamp") else None,
             }
             
-            # Process ping measurements
+            # Process based on measurement type
             if "result" in result and result.get("type") == "ping":
-                ping_results = result["result"]
-                rtts = []
-                
-                for ping in ping_results:
-                    if ping.get("rtt") is not None:
-                        rtts.append(ping["rtt"])
-                
-                failed_pings = len([r for r in ping_results if r.get("rtt") is None])
-                
-                processed_result.update({
-                    "packet_loss_percentage": (failed_pings / len(ping_results) * 100) if ping_results else 0,
-                    "latency_stats": {
-                        "min": min(rtts) if rtts else None,
-                        "max": max(rtts) if rtts else None,
-                        "avg": sum(rtts) / len(rtts) if rtts else None,
-                        "median": sorted(rtts)[len(rtts)//2] if rtts else None
-                    }
-                })
-            
-            # Process traceroute measurements  
+                processed_result.update(process_ping_result(result))
             elif "result" in result and result.get("type") == "traceroute":
-                traceroute_results = result["result"]
-                processed_result.update({
-                    "packet_loss_percentage": 0,  # Traceroute doesn't have packet loss in same way
-                    "latency_stats": {
-                        "min": None,
-                        "max": None, 
-                        "avg": None,
-                        "median": None
-                    },
-                    "hops_count": len(traceroute_results)
-                })
-            
-            # For other measurement types
+                processed_result.update(process_traceroute_result(result))
             else:
-                processed_result.update({
-                    "packet_loss_percentage": None,
-                    "latency_stats": {
-                        "min": None,
-                        "max": None,
-                        "avg": None, 
-                        "median": None
-                    }
-                })
+                processed_result.update(process_default_result())
             
             processed["results"].append(processed_result)
         
@@ -395,7 +359,7 @@ class SintraMeasurementClient:
         return stats
     
     def _save_results(self, measurement_id, processed_results):
-        results_file = self.results_dir / f"measurement_{measurement_id}_result.json"
+        results_file = self.fetched_measurements_dir / f"measurement_{measurement_id}_result.json"
         
         with open(results_file, 'w') as f:
             json.dump(processed_results, f, indent=2)
