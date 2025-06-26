@@ -59,7 +59,7 @@ See the [Configuration Documentation](docs/configuration.md) for detailed setup 
 The measurement client supports various command-line options for different operations:
 
 - **python sintra.py create**: Configure and start new network measurements
-- **python sintra.py fetch**: Retrieve results from existing/public measurements and processed for better understanding.
+- **python sintra.py fetch**: Retrieve and process results from existing or public measurements.
 
 
 ## Getting Started
