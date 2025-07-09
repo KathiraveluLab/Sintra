@@ -125,6 +125,8 @@ class SintraMeasurementClient:
 
                 # Support both area and country-based probe selection
                 probe_config = measurement_config.get('probes', {})
+                if 'country' in probe_config and 'area' in probe_config:
+                    raise ValueError("Both 'country' and 'area' cannot be specified in probes config; please use one or the other.")
                 if 'country' in probe_config:
                     source = AtlasSource(
                         type="country",
