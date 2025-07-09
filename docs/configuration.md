@@ -79,7 +79,7 @@ measurements:
     duration_hours: 1
     af: 4
     probes:
-      area: "US"
+      country: "US"
       count: 5
 ```
 
