@@ -1,8 +1,12 @@
-# Measurement IDs to fetch results.
+# This file is used to configure the measurement client for fetching results.
+# It specifies the measurement IDs to fetch and the settings for fetching.
+# Multiple measurement IDs can be specified, and the fetch settings include the limit and format for the results.
 measurement_ids:
   - 108497348
   - 108497346
 
+# Fetch settings for the measurement results
+# The limit specifies the maximum number of results to fetch, and the format specifies the output format
 fetch_settings:
   limit: 1000
   format: "json"  

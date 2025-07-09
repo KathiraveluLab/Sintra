@@ -1,25 +1,29 @@
+# This is a configuration file for Sintra measurement client
+# It defines various network measurements to be performed
+# Each measurement has a type, target, description, interval, duration, address family (af
+# and probes
 measurements:
-  - type: ping
-    target: github.com
-    description: "Ping measurement to Discord DNS from Japan"
-    interval: 300  
-    duration_hours: 1
-    af: 4  # IPv4
+  - type: ping # ping or traceroute
+    target: github.com # target domain or IP address
+    description: "Ping measurement to github DNS from Japan"  # Description of the measurement
+    interval: 300  # Interval in seconds
+    duration_hours: 1 # Duration in hours
+    af: 4  # Address family (4 for IPv4, 6 for IPv6)
     probes:
-      country: "JP"  
-      count: 10
+      country: "JP"  # Country code for the probe location
+      count: 10 # Number of probes to use
 
 
-  - type: traceroute
-    target: discord.com
-    description: "Traceroute to Discord from India"
-    protocol: "ICMP"
-    interval: 900  
-    duration_hours: 2
-    af: 4
+  - type: traceroute # ping or traceroute
+    target: discord.com # target domain or IP address
+    description: "Traceroute to Discord from India" # Description of the measurement
+    protocol: "ICMP" # Protocol to use (ICMP, TCP, UDP)
+    interval: 900  # Interval in seconds
+    duration_hours: 2 # Duration in hours
+    af: 4 # Address family (4 for IPv4, 6 for IPv6)
     probes:
-      country: "IN" 
-      count: 10
+      country: "IN" # Country code for the probe location
+      count: 10 # Number of probes to use
     
 
   # Example using area (original functionality still works)

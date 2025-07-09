@@ -18,13 +18,22 @@ from measurement_client.processors import (
 class SintraMeasurementClient:
     def __init__(self, config_path=None, create_config="measurement_client/create_config.yaml", fetch_config="measurement_client/fetch_config.yaml"):
         load_dotenv()
+
+        # RIPE Atlas API Key
+        # Ensure the API key is set in the environment variables
         self.api_key = os.getenv('RIPE_ATLAS_API_KEY')
         if not self.api_key:
             raise ValueError("RIPE_ATLAS_API_KEY not found in environment variables")
         
+        # Configuration paths for creating and fetching measurements
         self.config_path = config_path
+
+        # This path was the measurement_client/create_config.yaml
         self.create_config_path = create_config
+        # This path was the measurement_client/fetch_config.yaml
         self.fetch_config_path = fetch_config
+
+        # The results will be stored in these directories
         self.results_dir = Path("measurement_client/results")
         self.created_measurements_dir = self.results_dir / "created_measurements"
         self.fetched_measurements_dir = self.results_dir / "fetched_measurements"
@@ -32,6 +41,8 @@ class SintraMeasurementClient:
         self.create_config = None
         self.fetch_config = None
     
+    # This method for creating measurements by loading the configuration
+    # from the specified path and processing each measurement configuration.
     def load_config(self, config_type="create"):
         config_path = None
         try:
@@ -40,12 +51,18 @@ class SintraMeasurementClient:
                 if config_path is None:
                     raise ValueError("No configuration path provided for 'create' config")
                 with open(config_path, 'r') as file:
+                    #read the YAML configuration file
+                    # and load it into the create_config attribute
                     self.create_config = yaml.safe_load(file)
             elif config_type == "fetch":
+                # This is for fetching measurements
+                # It will load the fetch configuration from the specified path
                 config_path = self.config_path or self.fetch_config_path
                 if config_path is None:
                     raise ValueError("No configuration path provided for 'fetch' config")
                 with open(config_path, 'r') as file:
+                    #read the YAML configuration file
+                    # and load it into the fetch_config attribute
                     self.fetch_config = yaml.safe_load(file)
             else:
                 config_path = self.config_path
@@ -57,6 +74,8 @@ class SintraMeasurementClient:
             raise FileNotFoundError(f"Configuration file {config_path} not found")
     
     def create_measurements(self):
+        # This method creates measurements based on the loaded configuration.
+        # It processes each measurement configuration, creates the measurement,
         logger.info("Creating measurements...")
         self.load_config("create")
         
@@ -66,15 +85,22 @@ class SintraMeasurementClient:
 
         for measurement_config in self.create_config.get('measurements', []):
             try:
+                # Extract measurement type, target, and probe configuration
+                # Ensure that the measurement type is specified and valid
                 measurement_type = measurement_config.get('type', 'ping').lower()
                 target = measurement_config.get('target')
                 if not target:
                     logger.warning("No target specified for measurement. Skipping...")
                     continue
+                # Support both area and country-based probe selection
+                # If 'probes' is not specified, default to an empty dict
                 probe_config = measurement_config.get('probes', {})
 
+                # Create the measurement based on the type
                 if measurement_type == 'ping':
                     measurement = Ping(
+                        # Use the 'af' (address family) from the ping config
+                        # If not specified, it will default to IPv4 (4)
                         af=measurement_config.get('af'),
                         target=target,
                         description=measurement_config.get('description', f'Sintra ping to {target}'),
@@ -82,12 +108,15 @@ class SintraMeasurementClient:
                     )
                 elif measurement_type == 'traceroute':
                     traceroute_kwargs = {
+                        # Use the 'af' (address family) from the traceroute config
                         "af": measurement_config.get('af'),
                         "target": target,
                         "description": measurement_config.get('description', f'Sintra traceroute to {target}'),
                         "interval": measurement_config.get('interval')
                     }
                     if 'protocol' in measurement_config:
+                        # If 'protocol' is specified, use it
+                        # Otherwise, it will default to 'ICMP'
                         traceroute_kwargs["protocol"] = measurement_config.get('protocol')
                     measurement = Traceroute(**traceroute_kwargs)
                 else:
@@ -103,14 +132,27 @@ class SintraMeasurementClient:
                         requested=probe_config.get('count', 5)
                     )
                 else:
+                    # Default to area if 'country' is not specified
+                    # This will use the 'area' field if available, or default to 'WW'
+                    # If 'count' is not specified, default to 5
                     source = AtlasSource(
                         type="area",
                         value=probe_config.get('area', 'WW'),
                         requested=probe_config.get('count', 5)
                     )
 
+                # Set the start and stop times for the measurement
+                # Default to starting 1 minute from now and lasting for 1 hour
                 start_time = datetime.utcnow() + timedelta(minutes=1)
+                # If 'duration_hours' is specified in the measurement config,
+                # use it to calculate the stop time
                 stop_time = start_time + timedelta(hours=measurement_config.get('duration_hours', 1)) # Default to 1 hour if not specified
+
+
+                # Create the Atlas request for measurement creation
+                # This will use the start and stop times, API key, measurement, and source
+                # The AtlasCreateRequest will handle the actual API call to create the measurement
+                # This will return a success flag and the response from the API
 
                 atlas_request = AtlasCreateRequest(
                     start_time=start_time,
@@ -119,7 +161,8 @@ class SintraMeasurementClient:
                     measurements=[measurement],
                     sources=[source]
                 )
-
+                
+                # Create the measurement using the Atlas API
                 is_success, response = atlas_request.create()
 
                 if is_success:
@@ -138,6 +181,9 @@ class SintraMeasurementClient:
             except Exception as e:
                 logger.exception(f"Error creating measurement for {measurement_config.get('target', 'unknown')}: {e}")
     
+    # This method fetches measurements based on the provided measurement ID
+    # If no measurement ID is provided, it will load the fetch configuration
+    # and fetch all measurements specified in the configuration or saved measurements.
     def fetch_measurements(self, measurement_id=None):
         logger.info("Fetching measurements...")
         self.created_measurements_dir.mkdir(parents=True, exist_ok=True)
@@ -146,6 +192,8 @@ class SintraMeasurementClient:
         if measurement_id:
             measurement_ids = [measurement_id]
         else:
+            # If no measurement ID is provided, load the fetch configuration
+            # and get the measurement IDs from the configuration or saved measurements
             self.load_config("fetch")
             measurement_ids = []
             if self.fetch_config is not None:
@@ -157,11 +205,15 @@ class SintraMeasurementClient:
         for measurement_id in measurement_ids:
             logger.info(f"Fetching ALL results for measurement {measurement_id}...")
             
+            # Prepare the request parameters for fetching results
             kwargs = {
                 "msm_id": measurement_id,
                 "format": "json"
             }
             
+            # If fetch_config is provided, use it to set the start and stop times
+            # and any other fetch settings
+            # This will allow for more flexible fetching of results
             if hasattr(self, 'fetch_config') and self.fetch_config:
                 fetch_settings = self.fetch_config.get('fetch_settings', {})
                 
@@ -182,6 +234,8 @@ class SintraMeasurementClient:
             else:
                 logger.error(f"Failed to fetch results for measurement {measurement_id}")
     
+    # This method saves the measurement information to a JSON file
+    # It includes the measurement ID, target, type, created_at timestamp, and configuration.
     def _save_measurement_info(self, measurement_id, config, target):
         info = {
             "measurement_id": measurement_id,
@@ -191,10 +245,13 @@ class SintraMeasurementClient:
             "config": config
         }
         
+        # Ensure the created_measurements_dir exists
         info_file = self.created_measurements_dir / f"measurement_{measurement_id}_info.json"
         with open(info_file, 'w') as f:
             json.dump(info, f, indent=2)
     
+    # This method retrieves the saved measurement IDs from the created_measurements_dir
+    # It looks for files named "measurement_*_info.json" and extracts the measurement_id
     def _get_saved_measurement_ids(self):
         measurement_ids = []
         if self.created_measurements_dir.exists():
@@ -207,6 +264,8 @@ class SintraMeasurementClient:
                     continue
         return measurement_ids
     
+    # This method processes the results fetched from the RIPE Atlas API
+    # It takes the results and measurement_id as input and returns a processed dictionary
     def _process_results(self, results, measurement_id):
         processed = {
             "measurement_id": measurement_id,
@@ -242,6 +301,8 @@ class SintraMeasurementClient:
         
         return processed
     
+    # This method processes all results fetched from the RIPE Atlas API
+    # It takes the results and measurement_id as input and returns a processed dictionary
     def _process_all_results(self, results, measurement_id):
         processed = {
             "measurement_id": measurement_id,
@@ -278,6 +339,8 @@ class SintraMeasurementClient:
         
         return processed
     
+    # This method analyzes the traceroute path and returns a summary of the hops
+    # It takes the hops as input and returns a dictionary with hop details.
     def _analyze_traceroute_path(self, hops):
         path_analysis = {
             "total_hops": len(hops),
@@ -309,6 +372,10 @@ class SintraMeasurementClient:
         path_analysis["unique_ips"] = list(path_analysis["unique_ips"])
         return path_analysis
     
+    # This method calculates aggregated statistics from the results
+    # It computes average packet loss, average latency, min/max latency for ping,
+    # average hops for traceroute, and unique probes.
+    # It returns a dictionary with the aggregated statistics.
     def _calculate_aggregated_stats(self, results):
         stats = {
             "ping_stats": {
@@ -329,39 +396,50 @@ class SintraMeasurementClient:
             }
         }
         
-        ping_latencies = []
-        ping_losses = []
-        traceroute_hops = []
+        ping_count = 0
+        ping_latency_sum = 0
+        ping_loss_sum = 0
+        traceroute_count = 0
+        traceroute_hops_sum = 0
+        min_latency = float('inf')
+        max_latency = 0
         
         for result in results:
             probe_id = result.get("probe_id")
             if probe_id:
+                # Track unique probes and measurements per probe
                 stats["probe_stats"]["unique_probes"].add(probe_id)
+                # Track measurements per probe
                 stats["probe_stats"]["measurements_per_probe"][probe_id] = \
                     stats["probe_stats"]["measurements_per_probe"].get(probe_id, 0) + 1
             
             if result.get("measurement_type") == "ping" and result.get("latency_stats"):
-                stats["ping_stats"]["total_measurements"] += 1
-                if result["latency_stats"]["avg"]:
-                    ping_latencies.append(result["latency_stats"]["avg"])
-                    stats["ping_stats"]["min_latency"] = min(stats["ping_stats"]["min_latency"], 
-                                                           result["latency_stats"]["min"])
-                    stats["ping_stats"]["max_latency"] = max(stats["ping_stats"]["max_latency"], 
-                                                           result["latency_stats"]["max"])
+                ping_count += 1
+                latency_stats = result["latency_stats"]
                 
-                ping_losses.append(result.get("packet_loss_percentage", 0))
-            
+                if latency_stats["avg"]:
+                    ping_latency_sum += latency_stats["avg"]
+                    min_latency = min(min_latency, latency_stats["min"])
+                    max_latency = max(max_latency, latency_stats["max"])
+                
+                ping_loss_sum += result.get("packet_loss_percentage", 0)
+                
             elif result.get("measurement_type") == "traceroute":
-                stats["traceroute_stats"]["total_measurements"] += 1
+                traceroute_count += 1
                 if result.get("hops_count"):
-                    traceroute_hops.append(result["hops_count"])
+                    traceroute_hops_sum += result["hops_count"]
         
-        if ping_latencies:
-            stats["ping_stats"]["avg_latency"] = sum(ping_latencies) / len(ping_latencies)
-        if ping_losses:
-            stats["ping_stats"]["avg_packet_loss"] = sum(ping_losses) / len(ping_losses)
-        if traceroute_hops:
-            stats["traceroute_stats"]["avg_hops"] = sum(traceroute_hops) / len(traceroute_hops)
+        # Calculate final averages
+        if ping_count > 0:
+            stats["ping_stats"]["total_measurements"] = ping_count
+            stats["ping_stats"]["avg_latency"] = ping_latency_sum / ping_count
+            stats["ping_stats"]["avg_packet_loss"] = ping_loss_sum / ping_count
+            stats["ping_stats"]["min_latency"] = min_latency if min_latency != float('inf') else 0
+            stats["ping_stats"]["max_latency"] = max_latency
+        
+        if traceroute_count > 0:
+            stats["traceroute_stats"]["total_measurements"] = traceroute_count
+            stats["traceroute_stats"]["avg_hops"] = traceroute_hops_sum / traceroute_count
         
         stats["probe_stats"]["unique_probes"] = list(stats["probe_stats"]["unique_probes"])
         
@@ -374,14 +452,26 @@ class SintraMeasurementClient:
             json.dump(processed_results, f, indent=2)
 
 def main():
+    # This is the main entry point for the Sintra Measurement Client
+    # It sets up the argument parser, loads the configuration, and executes the appropriate command.
     parser = argparse.ArgumentParser(description='Sintra Measurement Client')
     subparsers = parser.add_subparsers(dest='command', help='Available commands')
     
+    # Create subparsers for 'create' and 'fetch' commands
+    # Each command can have its own configuration file path
     create_parser = subparsers.add_parser('create', help='Create measurements')
+    # This will allow for more flexible creation of measurements
+    # It will use the create_config_path by default, or a custom config if provided
     create_parser.add_argument('--config', help='Configuration file path (overrides default)')
     
+    # This will fetch measurement results
+    # It can fetch all results or a specific measurement ID
     fetch_parser = subparsers.add_parser('fetch', help='Fetch measurement results')
+    # It can fetch all results or a specific measurement ID
+    # If no measurement ID is provided, it will fetch all results
     fetch_parser.add_argument('--config', help='Configuration file path (overrides default)')
+    # If no measurement ID is provided, it will fetch all results
+    # If a measurement ID is provided, it will fetch results for that specific measurement
     fetch_parser.add_argument('--measurement-id', type=int, help='Specific measurement ID to fetch')
     
     args = parser.parse_args()
