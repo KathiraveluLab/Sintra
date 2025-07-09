@@ -24,7 +24,7 @@ measurements:
     duration_hours: 1
     af: 4
     probes:
-      area: "North America"
+      country: "JP"
       count: 10
 ```
 
@@ -50,12 +50,15 @@ measurements:
 
 #### Probe Configuration
 
-The `probes` section defines which RIPE Atlas probes to use:
+The `probes` section defines which RIPE Atlas probes to use. You can select probes by geographical area or by specific country:
 
 | Parameter | Type | Required | Description | Example |
 |-----------|------|----------|-------------|---------|
-| `area` | string | Yes | Geographical area | `"North America"`, `"Europe"`, `"Asia"` |
+| `area` | string | Yes* | Geographical area | `"North America"`, `"Europe"`, `"Asia"` |
+| `country` | string | Yes* | Country code (ISO 3166-1 alpha-2) | `"US"`, `"DE"`, `"JP"`, `"IN"` |
 | `count` | integer | Yes | Number of probes | `10`, `50`, `100` |
+
+*Either `area` or `country` must be specified, but not both.
 
 #### Traceroute-Specific Parameters
 
@@ -71,12 +74,12 @@ The `probes` section defines which RIPE Atlas probes to use:
 measurements:
   - type: ping
     target: google.com
-    description: "Basic ping to Google DNS"
+    description: "Basic ping to Google"
     interval: 300  # 5 minutes
     duration_hours: 1
     af: 4
     probes:
-      area: "North America"
+      country: "US"
       count: 5
 ```
 
@@ -84,28 +87,39 @@ measurements:
 
 ```yaml
 measurements:
-  # Ping measurement
+  # Ping measurement using country selection
   - type: ping
     target: discord.com
-    description: "Ping measurement to Discord DNS"
+    description: "Ping measurement to Discord DNS from Japan"
     interval: 300
     duration_hours: 1
     af: 4
     probes:
-      area: "South-Central"
+      country: "JP"  # Japan
       count: 10
 
-  # Traceroute measurement
+  # Traceroute measurement using country selection
   - type: traceroute
     target: discord.com
-    description: "Traceroute to Discord"
+    description: "Traceroute to Discord from India"
     protocol: "ICMP"
     interval: 900  # 15 minutes
     duration_hours: 2
     af: 4
     probes:
-      area: "South-East"
+      country: "IN"  # India
       count: 10
+
+  # Area-based selection (original functionality)
+  - type: ping
+    target: facebook.com
+    description: "Ping measurement using area selection"
+    interval: 240
+    duration_hours: 1
+    af: 4
+    probes:
+      country: "JP"
+      count: 6
 ```
 
 #### IPv6 Measurement
@@ -138,6 +152,39 @@ Common geographical areas supported by RIPE Atlas:
 - `"North-East"`
 - `"West"`
 - `"East"`
+
+### Country Codes
+
+Use ISO 3166-1 alpha-2 country codes for country-based probe selection. Common examples:
+
+**Americas:**
+- `"US"` - United States
+- `"CA"` - Canada
+- `"BR"` - Brazil
+- `"MX"` - Mexico
+
+**Europe:**
+- `"DE"` - Germany
+- `"GB"` - United Kingdom
+- `"FR"` - France
+- `"NL"` - Netherlands
+- `"IT"` - Italy
+- `"ES"` - Spain
+
+**Asia-Pacific:**
+- `"JP"` - Japan
+- `"CN"` - China
+- `"IN"` - India
+- `"KR"` - South Korea
+- `"AU"` - Australia
+- `"SG"` - Singapore
+
+**Other Regions:**
+- `"ZA"` - South Africa
+- `"EG"` - Egypt
+- `"RU"` - Russia
+
+For a complete list of country codes, refer to the [ISO 3166-1 alpha-2 standard](https://en.wikipedia.org/wiki/ISO_3166-1_alpha-2).
 
 ### Best Practices
 
