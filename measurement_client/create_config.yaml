@@ -1,27 +1,28 @@
 measurements:
   - type: ping
-    target: discord.com
-    description: "Ping measurement to Discord DNS"
+    target: github.com
+    description: "Ping measurement to Discord DNS from Japan"
     interval: 300  
     duration_hours: 1
     af: 4  # IPv4
     probes:
-      area: "South-Central"  
+      country: "JP"  
       count: 10
 
 
   - type: traceroute
     target: discord.com
-    description: "Traceroute to Discord"
+    description: "Traceroute to Discord from India"
     protocol: "ICMP"
     interval: 900  
     duration_hours: 2
     af: 4
     probes:
-      area: "South-East"
+      country: "IN" 
       count: 10
     
 
+  # Example using area (original functionality still works)
   # - type: ping
   #   target: facebook.com
   #   description: "Ping measurement to Facebook"

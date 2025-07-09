@@ -94,11 +94,20 @@ class SintraMeasurementClient:
                     logger.error(f"Unsupported measurement type: {measurement_type}")
                     continue
 
-                source = AtlasSource(
-                    type="area",
-                    value=probe_config.get('area', 'WW'),
-                    requested=probe_config.get('count', 5)
-                )
+                # Support both area and country-based probe selection
+                probe_config = measurement_config.get('probes', {})
+                if 'country' in probe_config:
+                    source = AtlasSource(
+                        type="country",
+                        value=probe_config.get('country'),
+                        requested=probe_config.get('count', 5)
+                    )
+                else:
+                    source = AtlasSource(
+                        type="area",
+                        value=probe_config.get('area', 'WW'),
+                        requested=probe_config.get('count', 5)
+                    )
 
                 start_time = datetime.utcnow() + timedelta(minutes=1)
                 stop_time = start_time + timedelta(hours=measurement_config.get('duration_hours', 1)) # Default to 1 hour if not specified

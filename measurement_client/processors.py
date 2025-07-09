@@ -1,4 +1,5 @@
 from datetime import datetime
+import statistics
 
 def process_ping_result(result):
     ping_results = result.get("result", [])
