@@ -77,5 +77,5 @@ class SintraEventManager:
                 data = json.load(f)
             measurement_id = data.get("measurement_id")
             events = data.get("events", [])
-            print(f"Measurement {measurement_id}: {len(events)} anomalies detected.")
+            logger.info(f"Measurement {measurement_id}: {len(events)} anomalies detected.")
 
