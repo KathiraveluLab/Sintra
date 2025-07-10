@@ -37,8 +37,12 @@ def main():
         
         elif args.command == 'detect':
             event_manager = SintraEventManager()
-            event_manager.analyze_all()
-            logger.info("Event detection complete.")
+            event_manager.detect_anomalies()
+            print("Anomaly detection complete. Alerts have been stored in event_manager/alerts/<measurement_id>/alerts.json.")
+
+        elif args.command == 'alerts':
+            event_manager = SintraEventManager()
+            event_manager.show_alerts_summary()
 
     except Exception as e:
         logger.error(f"Error: {e}")
