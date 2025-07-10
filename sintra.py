@@ -1,5 +1,6 @@
 import argparse
 import sys
+import json
 from measurement_client.client import SintraMeasurementClient
 from measurement_client.logger import logger
 from event_manager.eventmanager import SintraEventManager
@@ -37,12 +38,17 @@ def main():
         
         elif args.command == 'detect':
             event_manager = SintraEventManager()
-            event_manager.detect_anomalies()
-            print("Anomaly detection complete. Alerts have been stored in event_manager/alerts/<measurement_id>/alerts.json.")
+            event_manager.analyze_all()
+            logger.info("Anomaly detection complete. Alerts have been stored in event_manager/results/<measurement_id>.json.")
 
         elif args.command == 'alerts':
             event_manager = SintraEventManager()
-            event_manager.show_alerts_summary()
+            for result_file in event_manager.event_results_dir.glob("*.json"):
+                with open(result_file, "r") as f:
+                    data = json.load(f)
+                measurement_id = data.get("measurement_id")
+                events = data.get("events", [])
+                logger.info(f"Measurement {measurement_id}: {len(events)} anomalies detected.")
 
     except Exception as e:
         logger.error(f"Error: {e}")

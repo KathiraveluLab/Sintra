@@ -70,3 +70,12 @@ class SintraEventManager:
         # Stub for sending events to POX controller (to be implemented later)
         logger.info(f"Sending events for measurement {measurement_id} to POX controller (stub).")
 
+    def show_alerts_summary(self):
+        # Print a summary of all alerts/anomalies found
+        for result_file in self.event_results_dir.glob("*.json"):
+            with open(result_file, "r") as f:
+                data = json.load(f)
+            measurement_id = data.get("measurement_id")
+            events = data.get("events", [])
+            print(f"Measurement {measurement_id}: {len(events)} anomalies detected.")
+
