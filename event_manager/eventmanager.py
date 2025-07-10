@@ -22,7 +22,7 @@ class SintraEventManager:
                     logger.info(f"Events for measurement {measurement_id} saved.")
                 else:
                     logger.info(f"No anomalies found for measurement {measurement_id}.")
-            except Exception as e:
+            except (FileNotFoundError, json.JSONDecodeError, KeyError) as e:
                 logger.error(f"Failed to analyze {result_file}: {e}")
 
     def analyze_measurement(self, data):
