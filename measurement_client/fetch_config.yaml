@@ -3,6 +3,7 @@
 # Multiple measurement IDs can be specified, and the fetch settings include the limit and format for the results.
 measurement_ids:
   - 109867812
+  - 116281410
 
 # Fetch settings for the measurement results
 # The limit specifies the maximum number of results to fetch, and the format specifies the output format
