@@ -1,38 +1,57 @@
 # This is a configuration file for Sintra measurement client
 # It defines various network measurements to be performed
-# Each measurement has a type, target, description, interval, duration, address family (af
-# and probes
 measurements:
-  - type: ping # ping or traceroute
-    target: github.com # target domain or IP address
-    description: "Ping measurement to github DNS from Japan"  # Description of the measurement
-    interval: 300  # Interval in seconds
-    duration_hours: 1 # Duration in hours
+  - type: ping # Measurement type: ping or traceroute
+    target: github.com # Target domain or IP address
+    description: "Ping measurement to GitHub from Japan"  # Description of the measurement
+    interval: 300  # Interval in seconds between measurements
+    duration_hours: 1 # Total duration in hours
     af: 4  # Address family (4 for IPv4, 6 for IPv6)
     probes:
-      country: "JP"  # Country code for the probe location
+      country: "JP"  # Country code for probe location (ISO 3166-1 alpha-2)
       count: 10 # Number of probes to use
 
-
-  - type: traceroute # ping or traceroute
-    target: discord.com # target domain or IP address
+  - type: traceroute # Measurement type: ping or traceroute
+    target: discord.com # Target domain or IP address
     description: "Traceroute to Discord from India" # Description of the measurement
     protocol: "ICMP" # Protocol to use (ICMP, TCP, UDP)
-    interval: 900  # Interval in seconds
-    duration_hours: 2 # Duration in hours
+    interval: 900  # Interval in seconds between measurements
+    duration_hours: 2 # Total duration in hours
     af: 4 # Address family (4 for IPv4, 6 for IPv6)
     probes:
-      country: "IN" # Country code for the probe location
+      country: "IN" # Country code for probe location (ISO 3166-1 alpha-2)
       count: 10 # Number of probes to use
-    
 
-  # Example using area (original functionality still works)
+  # # Example with additional parameters
   # - type: ping
-  #   target: facebook.com
-  #   description: "Ping measurement to Facebook"
-  #   interval: 240
-  #   duration_hours: 1
+  #   target: 8.8.8.8 # Google DNS
+  #   description: "IPv4 ping to Google DNS from worldwide probes"
+  #   interval: 240  # 4 minutes
+  #   duration_hours: 6
   #   af: 4
   #   probes:
-  #     area: "North America"
-  #     count: 6
+  #     area: "WW"  # Worldwide probes
+  #     count: 15
+
+  # # IPv6 example
+  # - type: ping
+  #   target: 2001:4860:4860::8888 # Google DNS IPv6
+  #   description: "IPv6 ping to Google DNS from Europe"
+  #   interval: 300
+  #   duration_hours: 2
+  #   af: 6  # IPv6
+  #   probes:
+  #     area: "Europe"
+  #     count: 8
+
+# Additional examples (commented out):
+  # - type: traceroute
+  #   target: facebook.com
+  #   description: "TCP traceroute to Facebook"
+  #   protocol: "TCP"
+  #   interval: 1800  # 30 minutes
+  #   duration_hours: 12
+  #   af: 4
+  #   probes:
+  #     country: "US"
+  #     count: 5
