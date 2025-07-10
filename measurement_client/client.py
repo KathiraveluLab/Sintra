@@ -322,11 +322,34 @@ class SintraMeasurementClient:
         }
         
         for result in results:
+            # Determine measurement type from the result data
+            measurement_type = "unknown"
+            if "result" in result:
+                if result.get("type") == "ping":
+                    measurement_type = "ping"
+                elif result.get("type") == "traceroute":
+                    measurement_type = "traceroute"
+                elif isinstance(result.get("result"), list) and len(result["result"]) > 0:
+                    # Check if it looks like ping results (has rtt values)
+                    if any("rtt" in str(r) for r in result["result"][:3]):
+                        measurement_type = "ping"
+                    # Check if it looks like traceroute results (has hop numbers)
+                    elif any("hop" in str(r) for r in result["result"][:3]):
+                        measurement_type = "traceroute"
+            
             processed_result = {
+                "measurement_type": measurement_type,
+                "measurement_id": measurement_id,
                 "probe_id": result.get("prb_id"),
                 "source_address": result.get("from"),
                 "target_address": result.get("dst_addr"),
+                "target_name": result.get("dst_name"),
                 "timestamp": datetime.utcfromtimestamp(result.get("timestamp", 0)).isoformat() if result.get("timestamp") else None,
+                "firmware_version": result.get("fw"),
+                "probe_asn": result.get("from_asn"),
+                "probe_country": result.get("country_code"),
+                "protocol": result.get("proto", "ICMP"),
+                "address_family": result.get("af", 4)
             }
             
             # Process based on measurement type
@@ -483,11 +506,11 @@ def main():
         return
 
     try:
-        client = SintraMeasurementClient(config_path=args.config)
-
         if args.command == 'create':
+            client = SintraMeasurementClient(config_path=args.config)
             client.create_measurements()
         elif args.command == 'fetch':
+            client = SintraMeasurementClient(config_path=args.config)
             client.fetch_measurements(args.measurement_id)
 
     except Exception as e:
