@@ -506,11 +506,10 @@ def main():
         return
 
     try:
+        client = SintraMeasurementClient(config_path=args.config)
         if args.command == 'create':
-            client = SintraMeasurementClient(config_path=args.config)
             client.create_measurements()
         elif args.command == 'fetch':
-            client = SintraMeasurementClient(config_path=args.config)
             client.fetch_measurements(args.measurement_id)
 
     except Exception as e:
