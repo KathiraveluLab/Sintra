@@ -1,0 +1,31 @@
+{
+  "measurement_id": 109867812,
+  "events": [
+    {
+      "timestamp": "2025-07-25T10:56:19.170282Z",
+      "anomaly": "outlier_probe_latency",
+      "probe_id": 60163,
+      "target": "162.159.137.232",
+      "metric": "ping_rtt_ms",
+      "value": 104.54809927777778,
+      "threshold": null,
+      "units": "ms",
+      "severity": "warning"
+    }
+  ],
+  "analysis": {
+    "per_probe": {
+      "60163": {
+        "target": "162.159.137.232",
+        "anomaly_count": 1,
+        "anomalies": [
+          "outlier_probe_latency"
+        ]
+      }
+    },
+    "anomaly_summary": {
+      "outlier_probe_latency": 1
+    },
+    "total_anomalies": 1
+  }
+}

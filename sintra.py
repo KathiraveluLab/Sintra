@@ -39,7 +39,7 @@ def main():
         elif args.command == 'detect':
             event_manager = SintraEventManager()
             event_manager.analyze_all()
-            logger.info("Anomaly detection complete. Alerts have been stored in event_manager/results/<measurement_id>.json.")
+            logger.info("Anomaly detection complete. Detected anomalies have been stored in event_manager/results/<measurement_id>.json.")
 
         elif args.command == 'alerts':
             event_manager = SintraEventManager()
@@ -48,7 +48,18 @@ def main():
                     data = json.load(f)
                 measurement_id = data.get("measurement_id")
                 events = data.get("events", [])
+                anomaly_summary = {}
+                for event in events:
+                    anomaly = event.get("anomaly")
+                    threshold = event.get("threshold")
+                    anomaly_summary.setdefault(anomaly, {"count": 0, "thresholds": set()})
+                    anomaly_summary[anomaly]["count"] += 1
+                    if threshold is not None:
+                        anomaly_summary[anomaly]["thresholds"].add(threshold)
                 logger.info(f"Measurement {measurement_id}: {len(events)} anomalies detected.")
+                for anomaly, info in anomaly_summary.items():
+                    thresholds = ", ".join(str(t) for t in info["thresholds"])
+                    logger.info(f"  {anomaly}: {info['count']} events (thresholds: {thresholds})")
 
     except Exception as e:
         logger.error(f"Error: {e}")
