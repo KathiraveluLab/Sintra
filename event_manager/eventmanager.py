@@ -42,12 +42,12 @@ class SintraEventManager:
         probe_targets = {}
         traceroute_hops = {}
 
-        # Collect probe data for outlier/geo/jitter analysis
+        # Map probe_id to target address for all results
         for result in data.get("results", []):
             probe_id = result.get("probe_id")
-            target = result.get("target")
+            target_addr = result.get("target_address") if "target_address" in result else result.get("target")
+            probe_targets[probe_id] = target_addr
             mtype = result.get("measurement_type")
-            probe_targets[probe_id] = target
             if mtype == "ping":
                 latency = result.get("latency_stats", {}).get("avg")
                 loss = result.get("packet_loss_percentage")
@@ -146,7 +146,7 @@ class SintraEventManager:
                         "timestamp": timestamp,
                         "anomaly": "latency_spike",
                         "probe_id": probe_id,
-                        "target": target,
+                        "target": probe_targets[probe_id],
                         "metric": "ping_rtt_ms",
                         "value": latency,
                         "threshold": 250.0,
@@ -159,7 +159,7 @@ class SintraEventManager:
                         "timestamp": timestamp,
                         "anomaly": "latency_spike",
                         "probe_id": probe_id,
-                        "target": target,
+                        "target": probe_targets[probe_id],
                         "metric": "ping_rtt_ms",
                         "value": latency,
                         "threshold": 2 * baseline_rtt,
@@ -172,7 +172,7 @@ class SintraEventManager:
                         "timestamp": timestamp,
                         "anomaly": "packet_loss",
                         "probe_id": probe_id,
-                        "target": target,
+                        "target": probe_targets[probe_id],
                         "metric": "ping_loss_pct",
                         "value": loss,
                         "threshold": 10.0,
@@ -185,7 +185,7 @@ class SintraEventManager:
                         "timestamp": timestamp,
                         "anomaly": "unreachable_host",
                         "probe_id": probe_id,
-                        "target": target,
+                        "target": probe_targets[probe_id],
                         "metric": "reachability",
                         "value": 0,
                         "threshold": 1,
@@ -210,7 +210,7 @@ class SintraEventManager:
                         "timestamp": timestamp,
                         "anomaly": "route_change",
                         "probe_id": probe_id,
-                        "target": target,
+                        "target": probe_targets[probe_id],
                         "metric": "traceroute_hops",
                         "previous_hops": previous_hops,
                         "current_hops": hop_ips,
@@ -227,7 +227,7 @@ class SintraEventManager:
                             "timestamp": timestamp,
                             "anomaly": "path_flapping",
                             "probe_id": probe_id,
-                            "target": target,
+                            "target": probe_targets[probe_id],
                             "metric": "traceroute_hops",
                             "routes": recent_routes,
                             "severity": "warning"
@@ -238,7 +238,7 @@ class SintraEventManager:
                         "timestamp": timestamp,
                         "anomaly": "unreachable_host",
                         "probe_id": probe_id,
-                        "target": target,
+                        "target": probe_targets[probe_id],
                         "metric": "reachability",
                         "value": 0,
                         "threshold": 1,

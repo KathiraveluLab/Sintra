@@ -2,10 +2,10 @@
   "measurement_id": 109867812,
   "events": [
     {
-      "timestamp": "2025-07-25T10:40:41.627469Z",
+      "timestamp": "2025-07-25T10:46:57.021395Z",
       "anomaly": "outlier_probe_latency",
       "probe_id": 60163,
-      "target": null,
+      "target": "162.159.137.232",
       "metric": "ping_rtt_ms",
       "value": 104.612138,
       "threshold": null,
@@ -13,10 +13,10 @@
       "severity": "warning"
     },
     {
-      "timestamp": "2025-07-25T10:40:41.627469Z",
+      "timestamp": "2025-07-25T10:46:57.021395Z",
       "anomaly": "latency_spike",
       "probe_id": 1009014,
-      "target": null,
+      "target": "162.159.137.232",
       "metric": "ping_rtt_ms",
       "value": 12.001498333333336,
       "threshold": 2.664974,
