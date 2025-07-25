@@ -13,6 +13,8 @@ def is_outlier(value, values, factor=2):
     return value is not None and value > avg * factor
 
 def geo_anomaly_check(dist1, lat1, dist2, lat2, margin=50):
-    if dist1 and dist2 and dist1 > dist2 and lat1 < lat2 - margin:
+    if dist1 is None or lat1 is None or dist2 is None or lat2 is None:
+        return False
+    if dist1 > dist2 and lat1 < lat2 - margin:
         return True
     return False
