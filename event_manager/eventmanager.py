@@ -125,7 +125,7 @@ class SintraEventManager:
         # Main anomaly detection per probe
         for result in data.get("results", []):
             probe_id = result.get("probe_id")
-            target = result.get("target")
+            target = result.get("target_address")
             mtype = result.get("measurement_type")
             # --- Latency Spike ---
             if mtype == "ping":
