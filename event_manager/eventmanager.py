@@ -32,7 +32,6 @@ class SintraEventManager:
                 logger.error(f"Failed to analyze {result_file}: {e}")
 
     def analyze_measurement(self, data):
-        # Analyze a single measurement's results and return detected events
         events = []
         timestamp = datetime.utcnow().isoformat() + "Z"
         probe_latencies = {}
@@ -41,8 +40,10 @@ class SintraEventManager:
         probe_jitters = {}
         probe_targets = {}
         traceroute_hops = {}
+        baseline_rtts = {}
+        baseline_hops = {}
 
-        # Map probe_id to target address for all results
+        # Collect probe data for all anomaly checks
         for result in data.get("results", []):
             probe_id = result.get("probe_id")
             target_addr = result.get("target_address") if "target_address" in result else result.get("target")
@@ -56,10 +57,28 @@ class SintraEventManager:
                 probe_losses[probe_id] = loss
                 probe_jitters[probe_id] = calculate_jitter(rtts)
                 probe_distances[probe_id] = result.get("distance_km", None)
+                # Baseline RTT (adaptive)
+                baseline_file = self.baseline_dir / f"ping_{probe_id}_{target_addr}.json"
+                baseline_rtt = None
+                if baseline_file.exists():
+                    with open(baseline_file, "r") as bf:
+                        baseline_rtt = json.load(bf).get("avg_rtt")
+                baseline_rtts[probe_id] = baseline_rtt
+                if latency is not None:
+                    with open(baseline_file, "w") as bf:
+                        json.dump({"avg_rtt": latency}, bf)
             elif mtype == "traceroute":
                 hops = result.get("hops", [])
                 hop_ips = [h.get("ip") for h in hops if h.get("ip")]
                 traceroute_hops[probe_id] = hop_ips
+                baseline_file = self.baseline_dir / f"traceroute_{probe_id}_{target_addr}.json"
+                previous_hops = None
+                if baseline_file.exists():
+                    with open(baseline_file, "r") as bf:
+                        previous_hops = json.load(bf).get("hop_ips")
+                baseline_hops[probe_id] = previous_hops
+                with open(baseline_file, "w") as bf:
+                    json.dump({"hop_ips": hop_ips}, bf)
 
         # Outlier detection (latency/loss)
         if probe_latencies:
@@ -122,103 +141,81 @@ class SintraEventManager:
                     "severity": "warning"
                 })
 
-        # Main anomaly detection per probe
-        for result in data.get("results", []):
-            probe_id = result.get("probe_id")
-            target = result.get("target")
-            mtype = result.get("measurement_type")
+        # Per-probe anomaly detection (latency spike, packet loss, unreachable host, route change, path flapping)
+        for probe_id in probe_targets:
+            target_addr = probe_targets[probe_id]
             # --- Latency Spike ---
-            if mtype == "ping":
-                latency = result.get("latency_stats", {}).get("avg")
-                loss = result.get("packet_loss_percentage")
-                baseline_file = self.baseline_dir / f"ping_{probe_id}_{target}.json"
-                baseline_rtt = None
-                if baseline_file.exists():
-                    with open(baseline_file, "r") as bf:
-                        baseline_rtt = json.load(bf).get("avg_rtt")
-                # Save current RTT as new baseline
-                if latency is not None:
-                    with open(baseline_file, "w") as bf:
-                        json.dump({"avg_rtt": latency}, bf)
-                # Static threshold
-                if latency is not None and latency > 250:
-                    events.append({
-                        "timestamp": timestamp,
-                        "anomaly": "latency_spike",
-                        "probe_id": probe_id,
-                        "target": probe_targets[probe_id],
-                        "metric": "ping_rtt_ms",
-                        "value": latency,
-                        "threshold": 250.0,
-                        "units": "ms",
-                        "severity": "warning"
-                    })
-                # Adaptive threshold (2x baseline)
-                if latency is not None and baseline_rtt is not None and latency > 2 * baseline_rtt:
-                    events.append({
-                        "timestamp": timestamp,
-                        "anomaly": "latency_spike",
-                        "probe_id": probe_id,
-                        "target": probe_targets[probe_id],
-                        "metric": "ping_rtt_ms",
-                        "value": latency,
-                        "threshold": 2 * baseline_rtt,
-                        "units": "ms",
-                        "severity": "warning"
-                    })
-                # --- High Packet Loss ---
-                if loss is not None and loss > 10.0:
-                    events.append({
-                        "timestamp": timestamp,
-                        "anomaly": "packet_loss",
-                        "probe_id": probe_id,
-                        "target": probe_targets[probe_id],
-                        "metric": "ping_loss_pct",
-                        "value": loss,
-                        "threshold": 10.0,
-                        "units": "%",
-                        "severity": "warning"
-                    })
-                # --- Unreachable Host ---
-                if loss is not None and loss == 100.0:
-                    events.append({
-                        "timestamp": timestamp,
-                        "anomaly": "unreachable_host",
-                        "probe_id": probe_id,
-                        "target": probe_targets[probe_id],
-                        "metric": "reachability",
-                        "value": 0,
-                        "threshold": 1,
-                        "units": "reachable_flag",
-                        "severity": "critical"
-                    })
+            latency = probe_latencies.get(probe_id)
+            baseline_rtt = baseline_rtts.get(probe_id)
+            if latency is not None and latency > 250:
+                events.append({
+                    "timestamp": timestamp,
+                    "anomaly": "latency_spike",
+                    "probe_id": probe_id,
+                    "target": target_addr,
+                    "metric": "ping_rtt_ms",
+                    "value": latency,
+                    "threshold": 250.0,
+                    "units": "ms",
+                    "severity": "warning"
+                })
+            if latency is not None and baseline_rtt is not None and latency > 2 * baseline_rtt:
+                events.append({
+                    "timestamp": timestamp,
+                    "anomaly": "latency_spike",
+                    "probe_id": probe_id,
+                    "target": target_addr,
+                    "metric": "ping_rtt_ms",
+                    "value": latency,
+                    "threshold": 2 * baseline_rtt,
+                    "units": "ms",
+                    "severity": "warning"
+                })
+            # --- High Packet Loss ---
+            loss = probe_losses.get(probe_id)
+            if loss is not None and loss > 10.0:
+                events.append({
+                    "timestamp": timestamp,
+                    "anomaly": "packet_loss",
+                    "probe_id": probe_id,
+                    "target": target_addr,
+                    "metric": "ping_loss_pct",
+                    "value": loss,
+                    "threshold": 10.0,
+                    "units": "%",
+                    "severity": "warning"
+                })
+            # --- Unreachable Host ---
+            if loss is not None and loss == 100.0:
+                events.append({
+                    "timestamp": timestamp,
+                    "anomaly": "unreachable_host",
+                    "probe_id": probe_id,
+                    "target": target_addr,
+                    "metric": "reachability",
+                    "value": 0,
+                    "threshold": 1,
+                    "units": "reachable_flag",
+                    "severity": "critical"
+                })
             # --- Traceroute Route Change ---
-            elif mtype == "traceroute":
-                hops = result.get("hops", [])
-                hop_ips = [h.get("ip") for h in hops if h.get("ip")]
-                baseline_file = self.baseline_dir / f"traceroute_{probe_id}_{target}.json"
-                previous_hops = None
-                if baseline_file.exists():
-                    with open(baseline_file, "r") as bf:
-                        previous_hops = json.load(bf).get("hop_ips")
-                # Save current hops as baseline
-                with open(baseline_file, "w") as bf:
-                    json.dump({"hop_ips": hop_ips}, bf)
-                # Route change detection
-                if previous_hops and hop_ips and previous_hops != hop_ips:
-                    events.append({
-                        "timestamp": timestamp,
-                        "anomaly": "route_change",
-                        "probe_id": probe_id,
-                        "target": probe_targets[probe_id],
-                        "metric": "traceroute_hops",
-                        "previous_hops": previous_hops,
-                        "current_hops": hop_ips,
-                        "severity": "warning"
-                    })
-                # Path flapping detection (track history)
-                route_key = f"{probe_id}_{target}"
-                self.route_history.setdefault(route_key, [])
+            hop_ips = traceroute_hops.get(probe_id)
+            previous_hops = baseline_hops.get(probe_id)
+            if previous_hops and hop_ips and previous_hops != hop_ips:
+                events.append({
+                    "timestamp": timestamp,
+                    "anomaly": "route_change",
+                    "probe_id": probe_id,
+                    "target": target_addr,
+                    "metric": "traceroute_hops",
+                    "previous_hops": previous_hops,
+                    "current_hops": hop_ips,
+                    "severity": "warning"
+                })
+            # --- Path Flapping ---
+            route_key = f"{probe_id}_{target_addr}"
+            self.route_history.setdefault(route_key, [])
+            if hop_ips:
                 self.route_history[route_key].append(hop_ips)
                 if len(self.route_history[route_key]) > 3:
                     recent_routes = self.route_history[route_key][-3:]
@@ -227,18 +224,18 @@ class SintraEventManager:
                             "timestamp": timestamp,
                             "anomaly": "path_flapping",
                             "probe_id": probe_id,
-                            "target": probe_targets[probe_id],
+                            "target": target_addr,
                             "metric": "traceroute_hops",
                             "routes": recent_routes,
                             "severity": "warning"
                         })
-                # Unreachable host via traceroute (destination not reached)
-                if hop_ips and hop_ips[-1] != target:
+                # --- Unreachable host via traceroute (destination not reached)
+                if hop_ips and hop_ips[-1] != target_addr:
                     events.append({
                         "timestamp": timestamp,
                         "anomaly": "unreachable_host",
                         "probe_id": probe_id,
-                        "target": probe_targets[probe_id],
+                        "target": target_addr,
                         "metric": "reachability",
                         "value": 0,
                         "threshold": 1,
@@ -248,10 +245,36 @@ class SintraEventManager:
         return events
 
     def save_events(self, measurement_id, events):
-        # Save detected events to event_manager/results/<measurement_id>.json
+        # Organize analysis per probe and anomaly type
+        probe_analysis = {}
+        anomaly_summary = {}
+        for event in events:
+            probe_id = event.get("probe_id")
+            anomaly = event.get("anomaly")
+            probe_analysis.setdefault(probe_id, {"target": event.get("target"), "anomalies": []})
+            probe_analysis[probe_id]["anomalies"].append(anomaly)
+            anomaly_summary[anomaly] = anomaly_summary.get(anomaly, 0) + 1
+
+        analysis = {
+            "per_probe": {
+                pid: {
+                    "target": info["target"],
+                    "anomaly_count": len(info["anomalies"]),
+                    "anomalies": info["anomalies"]
+                }
+                for pid, info in probe_analysis.items()
+            },
+            "anomaly_summary": anomaly_summary,
+            "total_anomalies": len(events)
+        }
+
         out_file = self.event_results_dir / f"{measurement_id}.json"
         with open(out_file, "w") as f:
-            json.dump({"measurement_id": measurement_id, "events": events}, f, indent=2)
+            json.dump({
+                "measurement_id": measurement_id,
+                "events": events,
+                "analysis": analysis
+            }, f, indent=2)
 
     def send_to_controller(self, measurement_id):
         # sending events to POX controller (to be implemented later)
@@ -270,6 +293,9 @@ class SintraEventManager:
             for event in events:
                 anomaly = event.get("anomaly")
                 anomaly_counts[anomaly] = anomaly_counts.get(anomaly, 0) + 1
+            for anomaly, count in anomaly_counts.items():
+                desc = ANOMALY_TYPES.get(anomaly, {}).get("description", "")
+                logger.info(f"  {anomaly}: {count} events - {desc}")
             for anomaly, count in anomaly_counts.items():
                 desc = ANOMALY_TYPES.get(anomaly, {}).get("description", "")
                 logger.info(f"  {anomaly}: {count} events - {desc}")

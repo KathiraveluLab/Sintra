@@ -320,48 +320,73 @@ class SintraMeasurementClient:
             },
             "results": []
         }
-        
+
+        probe_results = {}
         for result in results:
-            # Determine measurement type from the result data
-            measurement_type = "unknown"
-            if "result" in result:
-                if result.get("type") == "ping":
-                    measurement_type = "ping"
-                elif result.get("type") == "traceroute":
-                    measurement_type = "traceroute"
-                elif isinstance(result.get("result"), list) and len(result["result"]) > 0:
-                    # Check if it looks like ping results (has rtt values)
-                    if any("rtt" in str(r) for r in result["result"][:3]):
-                        measurement_type = "ping"
-                    # Check if it looks like traceroute results (has hop numbers)
-                    elif any("hop" in str(r) for r in result["result"][:3]):
-                        measurement_type = "traceroute"
-            
-            processed_result = {
-                "measurement_type": measurement_type,
-                "measurement_id": measurement_id,
-                "probe_id": result.get("prb_id"),
-                "source_address": result.get("from"),
-                "target_address": result.get("dst_addr"),
-                "target_name": result.get("dst_name"),
-                "timestamp": datetime.utcfromtimestamp(result.get("timestamp", 0)).isoformat() if result.get("timestamp") else None,
-                "firmware_version": result.get("fw"),
-                "probe_asn": result.get("from_asn"),
-                "probe_country": result.get("country_code"),
-                "protocol": result.get("proto", "ICMP"),
-                "address_family": result.get("af", 4)
-            }
-            
-            # Process based on measurement type
-            if "result" in result and result.get("type") == "ping":
-                processed_result.update(process_ping_result(result))
-            elif "result" in result and result.get("type") == "traceroute":
-                processed_result.update(process_traceroute_result(result))
-            else:
-                processed_result.update(process_default_result())
-            
-            processed["results"].append(processed_result)
-        
+            probe_id = result.get("prb_id")
+            measurement_type = result.get("type")
+            if probe_id not in probe_results:
+                probe_results[probe_id] = {
+                    "measurement_type": measurement_type,
+                    "measurement_id": measurement_id,
+                    "probe_id": probe_id,
+                    "source_address": result.get("from"),
+                    "target_address": result.get("dst_addr"),
+                    "target_name": result.get("dst_name"),
+                    "timestamp": datetime.utcfromtimestamp(result.get("timestamp", 0)).isoformat() if result.get("timestamp") else None,
+                    "firmware_version": result.get("fw"),
+                    "probe_asn": result.get("from_asn"),
+                    "probe_country": result.get("country_code"),
+                    "protocol": result.get("proto", "ICMP"),
+                    "address_family": result.get("af", 4)
+                }
+                # Initialize aggregation fields
+                if measurement_type == "ping":
+                    probe_results[probe_id].update({
+                        "latency_stats": {"rtts": [], "avg": None, "min": None, "max": None},
+                        "packet_loss_percentage": None,
+                        "packets_sent": 0,
+                        "packets_received": 0
+                    })
+                elif measurement_type == "traceroute":
+                    probe_results[probe_id].update({
+                        "hops": [],
+                        "hops_count": 0
+                    })
+
+            # Aggregate ping results
+            if measurement_type == "ping" and "result" in result:
+                ping_results = result["result"]
+                rtts = [r.get("rtt") for r in ping_results if r.get("rtt") is not None]
+                probe_results[probe_id]["latency_stats"]["rtts"].extend(rtts)
+                probe_results[probe_id]["packets_sent"] += len(ping_results)
+                probe_results[probe_id]["packets_received"] += len(rtts)
+                loss_count = len([r for r in ping_results if r.get("x")])
+                # Calculate packet loss percentage for this batch
+                if probe_results[probe_id]["packets_sent"] > 0:
+                    probe_results[probe_id]["packet_loss_percentage"] = (
+                        loss_count / probe_results[probe_id]["packets_sent"] * 100
+                    )
+            # Aggregate traceroute results
+            elif measurement_type == "traceroute" and "result" in result:
+                hops = result.get("result", [])
+                probe_results[probe_id]["hops"] = hops
+                probe_results[probe_id]["hops_count"] = len(hops)
+
+        # Finalize latency stats for ping
+        for probe_id, res in probe_results.items():
+            if res.get("measurement_type") == "ping":
+                rtts = res["latency_stats"]["rtts"]
+                if rtts:
+                    res["latency_stats"]["avg"] = sum(rtts) / len(rtts)
+                    res["latency_stats"]["min"] = min(rtts)
+                    res["latency_stats"]["max"] = max(rtts)
+                else:
+                    res["latency_stats"]["avg"] = None
+                    res["latency_stats"]["min"] = None
+                    res["latency_stats"]["max"] = None
+
+        processed["results"] = list(probe_results.values())
         return processed
     
     # This method analyzes the traceroute path and returns a summary of the hops

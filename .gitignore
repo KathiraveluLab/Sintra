@@ -213,3 +213,5 @@ cython_debug/
 .cursorindexingignore
 
 event_manager/baseline
+event_manager/results
+measurement_client/results
