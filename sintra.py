@@ -39,7 +39,7 @@ def main():
         elif args.command == 'detect':
             event_manager = SintraEventManager()
             event_manager.analyze_all()
-            logger.info("Anomaly detection complete. Alerts (latency spike, packet loss, unreachable host, route change) have been stored in event_manager/results/<measurement_id>.json.")
+            logger.info("Anomaly detection complete. Detected anomalies have been stored in event_manager/results/<measurement_id>.json.")
 
         elif args.command == 'alerts':
             event_manager = SintraEventManager()
