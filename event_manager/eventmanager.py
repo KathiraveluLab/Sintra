@@ -46,7 +46,8 @@ class SintraEventManager:
         # Collect probe data for all anomaly checks
         for result in data.get("results", []):
             probe_id = result.get("probe_id")
-            target_addr = result.get("target_address") if "target_address" in result else result.get("target")
+            # Always prefer 'target_address' if present, else fallback to 'target'
+            target_addr = result.get("target_address") or result.get("target")
             probe_targets[probe_id] = target_addr
             mtype = result.get("measurement_type")
             if mtype == "ping":
@@ -141,11 +142,9 @@ class SintraEventManager:
                     "severity": "warning"
                 })
 
-        # Main anomaly detection per probe
-        for result in data.get("results", []):
-            probe_id = result.get("probe_id")
-            target = result.get("target")
-            mtype = result.get("measurement_type")
+        # Main anomaly detection per probe (refactored to use probe_targets for target field)
+        for probe_id in probe_targets:
+            target_addr = probe_targets[probe_id]
             # --- Latency Spike ---
             latency = probe_latencies.get(probe_id)
             baseline_rtt = baseline_rtts.get(probe_id)
