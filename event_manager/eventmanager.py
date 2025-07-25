@@ -141,9 +141,11 @@ class SintraEventManager:
                     "severity": "warning"
                 })
 
-        # Per-probe anomaly detection (latency spike, packet loss, unreachable host, route change, path flapping)
-        for probe_id in probe_targets:
-            target_addr = probe_targets[probe_id]
+        # Main anomaly detection per probe
+        for result in data.get("results", []):
+            probe_id = result.get("probe_id")
+            target = result.get("target")
+            mtype = result.get("measurement_type")
             # --- Latency Spike ---
             latency = probe_latencies.get(probe_id)
             baseline_rtt = baseline_rtts.get(probe_id)
