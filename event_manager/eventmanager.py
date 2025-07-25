@@ -46,8 +46,7 @@ class SintraEventManager:
         # Collect probe data for all anomaly checks
         for result in data.get("results", []):
             probe_id = result.get("probe_id")
-            # Always prefer 'target_address' if present, else fallback to 'target'
-            target_addr = result.get("target_address") or result.get("target")
+            target_addr = result.get("target_address") if "target_address" in result else result.get("target")
             probe_targets[probe_id] = target_addr
             mtype = result.get("measurement_type")
             if mtype == "ping":
