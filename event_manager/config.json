@@ -1,0 +1,18 @@
+{
+  "thresholds": {
+    "latency_spike_ms": 250.0,
+    "latency_spike_multiplier": 2.0,
+    "packet_loss_percentage": 10.0,
+    "jitter_spike_ms": 15.0,
+    "outlier_factor": 2.0,
+    "geo_anomaly_margin_ms": 50.0,
+    "path_flapping_window": 3
+  },
+  "detection": {
+    "enable_outlier_detection": true,
+    "enable_geo_anomaly_detection": true,
+    "enable_adaptive_baseline": true
+  },
+  "level": "INFO",
+  "include_debug_info": false
+}

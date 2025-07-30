@@ -214,4 +214,4 @@ cython_debug/
 
 event_manager/baseline
 event_manager/results
-measurement_client/results
+measurement_client/results/
