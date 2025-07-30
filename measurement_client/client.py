@@ -4,6 +4,7 @@ import yaml
 import argparse
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
 from ripe.atlas.cousteau import (
     Ping, Traceroute, AtlasCreateRequest, AtlasResultsRequest,
@@ -17,195 +18,337 @@ from measurement_client.processors import (
 
 class SintraMeasurementClient:
     def __init__(self, config_path=None, create_config="measurement_client/create_config.yaml", fetch_config="measurement_client/fetch_config.yaml"):
-        load_dotenv()
+        # Initialize the Sintra Measurement Client.
+        try:
+            load_dotenv()
 
-        # RIPE Atlas API Key
-        # Ensure the API key is set in the environment variables
-        self.api_key = os.getenv('RIPE_ATLAS_API_KEY')
-        if not self.api_key:
-            raise ValueError("RIPE_ATLAS_API_KEY not found in environment variables")
-        
-        # Configuration paths for creating and fetching measurements
-        self.config_path = config_path
+            # RIPE Atlas API Key validation
+            self.api_key = os.getenv('RIPE_ATLAS_API_KEY')
+            if not self.api_key:
+                raise ValueError("RIPE_ATLAS_API_KEY not found in environment variables")
+            
+            # Configuration paths
+            self.config_path = config_path
+            self.create_config_path = create_config
+            self.fetch_config_path = fetch_config
 
-        # This path was the measurement_client/create_config.yaml
-        self.create_config_path = create_config
-        # This path was the measurement_client/fetch_config.yaml
-        self.fetch_config_path = fetch_config
+            # Results directories
+            self.results_dir = Path("measurement_client/results")
+            self.created_measurements_dir = self.results_dir / "created_measurements"
+            self.fetched_measurements_dir = self.results_dir / "fetched_measurements"
+            
+            # Ensure directories exists or not
+            self._ensure_directories()
+            
+            self.create_config = None
+            self.fetch_config = None
+            
+            logger.info("SintraMeasurementClient initialized successfully")
+            
+        except Exception as e:
+            logger.error(f"Failed to initialize SintraMeasurementClient: {e}")
+            raise
 
-        # The results will be stored in these directories
-        self.results_dir = Path("measurement_client/results")
-        self.created_measurements_dir = self.results_dir / "created_measurements"
-        self.fetched_measurements_dir = self.results_dir / "fetched_measurements"
-        
-        self.create_config = None
-        self.fetch_config = None
-    
-    # This method for creating measurements by loading the configuration
-    # from the specified path and processing each measurement configuration.
+    def _ensure_directories(self) -> None:
+        try:
+            self.results_dir.mkdir(parents=True, exist_ok=True)
+            self.created_measurements_dir.mkdir(parents=True, exist_ok=True)
+            self.fetched_measurements_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.error(f"Failed to create directories: {e}")
+            raise
+
     def load_config(self, config_type="create"):
         config_path = None
         try:
             if config_type == "create":
                 config_path = self.config_path or self.create_config_path
-                if config_path is None:
+                if not config_path:
                     raise ValueError("No configuration path provided for 'create' config")
+                
+                if not Path(config_path).exists():
+                    raise FileNotFoundError(f"Create configuration file {config_path} not found")
+                
                 with open(config_path, 'r') as file:
-                    #read the YAML configuration file
-                    # and load it into the create_config attribute
                     self.create_config = yaml.safe_load(file)
+                
+                # Validate create configuration
+                self._validate_create_config()
+                
             elif config_type == "fetch":
-                # This is for fetching measurements
-                # It will load the fetch configuration from the specified path
                 config_path = self.config_path or self.fetch_config_path
-                if config_path is None:
+                if not config_path:
                     raise ValueError("No configuration path provided for 'fetch' config")
+                
+                if not Path(config_path).exists():
+                    raise FileNotFoundError(f"Fetch configuration file {config_path} not found")
+                
                 with open(config_path, 'r') as file:
-                    #read the YAML configuration file
-                    # and load it into the fetch_config attribute
                     self.fetch_config = yaml.safe_load(file)
+                
+                # Validate fetch configuration
+                self._validate_fetch_config()
             else:
-                config_path = self.config_path
-                if config_path is None:
-                    raise ValueError("No configuration path provided")
-                with open(config_path, 'r') as file:
-                    self.config = yaml.safe_load(file)
-        except FileNotFoundError:
-            raise FileNotFoundError(f"Configuration file {config_path} not found")
-    
-    def create_measurements(self):
-        # This method creates measurements based on the loaded configuration.
-        # It processes each measurement configuration, creates the measurement,
-        logger.info("Creating measurements...")
-        self.load_config("create")
+                raise ValueError(f"Invalid config_type: {config_type}")
+                
+            logger.info(f"Configuration loaded successfully from {config_path}")
+            
+        except (yaml.YAMLError, IOError) as e:
+            logger.error(f"Failed to load configuration from {config_path}: {e}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error loading configuration: {e}")
+            raise
+
+    def _validate_create_config(self) -> None:
+        if not self.create_config:
+            raise ValueError("Create configuration is empty")
         
+        measurements = self.create_config.get('measurements', [])
+        if not measurements:
+            raise ValueError("No measurements defined in create configuration")
+        
+        for i, measurement in enumerate(measurements):
+            # Validate required fields
+            if 'target' not in measurement:
+                raise ValueError(f"Measurement {i}: 'target' field is required")
+            
+            measurement_type = measurement.get('type', 'ping').lower()
+            if measurement_type not in ['ping', 'traceroute']:
+                raise ValueError(f"Measurement {i}: Invalid type '{measurement_type}'. Must be 'ping' or 'traceroute'")
+            
+            # Validate probes configuration
+            probes = measurement.get('probes', {})
+            if 'country' in probes and 'area' in probes:
+                raise ValueError(f"Measurement {i}: Cannot specify both 'country' and 'area' in probes")
+            
+            logger.debug(f"Measurement {i} validation passed")
+
+    def _validate_fetch_config(self) -> None:
+        if not self.fetch_config:
+            raise ValueError("Fetch configuration is empty")
+        
+        measurement_ids = self.fetch_config.get('measurement_ids', [])
+        if not measurement_ids:
+            logger.warning("No measurement_ids defined in fetch configuration")
+        
+        for measurement_id in measurement_ids:
+            if not isinstance(measurement_id, int):
+                raise ValueError(f"Invalid measurement_id: {measurement_id}. Must be an integer")
+
+    # This method creates measurements based on the loaded configuration.
+    # It processes each measurement configuration, creates the measurement,
+    logger.info("Creating measurements...")
+    def create_measurements(self):
+        logger.info("Creating measurements...")
+        
+        try:
+            self.load_config("create")
+        except Exception as e:
+            logger.error(f"Failed to load create configuration: {e}")
+            return
+
         if not self.create_config:
             logger.error("No create configuration loaded. Please check your config file.")
             return
 
-        for measurement_config in self.create_config.get('measurements', []):
+        measurements = self.create_config.get('measurements', [])
+        successful_count = 0
+        failed_count = 0
+
+        for i, measurement_config in enumerate(measurements):
             try:
-                # Extract measurement type, target, and probe configuration
-                # Ensure that the measurement type is specified and valid
-                measurement_type = measurement_config.get('type', 'ping').lower()
-                target = measurement_config.get('target')
-                if not target:
-                    logger.warning("No target specified for measurement. Skipping...")
-                    continue
-                # Support both area and country-based probe selection
-                # If 'probes' is not specified, default to an empty dict
-                probe_config = measurement_config.get('probes', {})
-
-                # Create the measurement based on the type
-                if measurement_type == 'ping':
-                    measurement = Ping(
-                        # Use the 'af' (address family) from the ping config
-                        # If not specified, it will default to IPv4 (4)
-                        af=measurement_config.get('af'),
-                        target=target,
-                        description=measurement_config.get('description', f'Sintra ping to {target}'),
-                        interval=measurement_config.get('interval')
-                    )
-                elif measurement_type == 'traceroute':
-                    traceroute_kwargs = {
-                        # Use the 'af' (address family) from the traceroute config
-                        "af": measurement_config.get('af'),
-                        "target": target,
-                        "description": measurement_config.get('description', f'Sintra traceroute to {target}'),
-                        "interval": measurement_config.get('interval')
-                    }
-                    if 'protocol' in measurement_config:
-                        # If 'protocol' is specified, use it
-                        # Otherwise, it will default to 'ICMP'
-                        traceroute_kwargs["protocol"] = measurement_config.get('protocol')
-                    measurement = Traceroute(**traceroute_kwargs)
+                success = self._create_single_measurement(measurement_config, i)
+                if success:
+                    successful_count += 1
                 else:
-                    logger.error(f"Unsupported measurement type: {measurement_type}")
-                    continue
-
-                # Support both area and country-based probe selection
-                probe_config = measurement_config.get('probes', {})
-                if 'country' in probe_config and 'area' in probe_config:
-                    raise ValueError("Both 'country' and 'area' cannot be specified in probes config; please use one or the other.")
-                if 'country' in probe_config:
-                    source = AtlasSource(
-                        type="country",
-                        value=probe_config.get('country'),
-                        requested=probe_config.get('count', 5)
-                    )
-                else:
-                    # Default to area if 'country' is not specified
-                    # This will use the 'area' field if available, or default to 'WW'
-                    # If 'count' is not specified, default to 5
-                    source = AtlasSource(
-                        type="area",
-                        value=probe_config.get('area', 'WW'),
-                        requested=probe_config.get('count', 5)
-                    )
-
-                # Set the start and stop times for the measurement
-                # Default to starting 1 minute from now and lasting for 1 hour
-                start_time = datetime.utcnow() + timedelta(minutes=1)
-                # If 'duration_hours' is specified in the measurement config,
-                # use it to calculate the stop time
-                stop_time = start_time + timedelta(hours=measurement_config.get('duration_hours', 1)) # Default to 1 hour if not specified
-
-
-                # Create the Atlas request for measurement creation
-                # This will use the start and stop times, API key, measurement, and source
-                # The AtlasCreateRequest will handle the actual API call to create the measurement
-                # This will return a success flag and the response from the API
-
-                atlas_request = AtlasCreateRequest(
-                    start_time=start_time,
-                    stop_time=stop_time,
-                    key=self.api_key,
-                    measurements=[measurement],
-                    sources=[source]
-                )
-                
-                # Create the measurement using the Atlas API
-                is_success, response = atlas_request.create()
-
-                if is_success:
-                    try:
-                        if isinstance(response, dict) and "measurements" in response:
-                            measurement_id = response["measurements"][0]
-                        else:
-                            measurement_id = response[0][0]
-                        logger.info(f"Created {measurement_type} measurement {measurement_id} for {target}")
-                        logger.debug(f"Measurement response: {response}")
-                        self._save_measurement_info(measurement_id, measurement_config, target)
-                    except Exception as e:
-                        logger.error(f"Measurement created for {target}, but failed to extract measurement ID: {e}, response: {response}")
-                else:
-                    logger.error(f"Failed to create measurement for {target}: {response}")
+                    failed_count += 1
             except Exception as e:
-                logger.exception(f"Error creating measurement for {measurement_config.get('target', 'unknown')}: {e}")
-    
+                failed_count += 1
+                target = measurement_config.get('target', 'unknown')
+                logger.exception(f"Error creating measurement for {target}: {e}")
+
+        logger.info(f"Measurement creation complete: {successful_count} successful, {failed_count} failed")
+
+    def _create_single_measurement(self, measurement_config: Dict[str, Any], index: int) -> bool:
+        try:
+            # Extract and validate measurement parameters
+            measurement_type = measurement_config.get('type', 'ping').lower()
+            target = measurement_config.get('target')
+            
+            if not target:
+                logger.warning(f"Measurement {index}: No target specified. Skipping...")
+                return False
+            
+            # Create the measurement object
+            measurement = self._create_measurement_object(measurement_config, measurement_type, target)
+            if not measurement:
+                return False
+            
+            # Create source configuration
+            source = self._create_source_configuration(measurement_config)
+            if not source:
+                return False
+            
+            # Set timing parameters
+            start_time = datetime.utcnow() + timedelta(minutes=1)
+            duration_hours = measurement_config.get('duration_hours', 1)
+            stop_time = start_time + timedelta(hours=duration_hours)
+
+            # Create the Atlas request
+            atlas_request = AtlasCreateRequest(
+                start_time=start_time,
+                stop_time=stop_time,
+                key=self.api_key,
+                measurements=[measurement],
+                sources=[source]
+            )
+            
+            # Execute the measurement creation
+            is_success, response = atlas_request.create()
+
+            if is_success:
+                measurement_id = self._extract_measurement_id(response)
+                if measurement_id:
+                    logger.info(f"Created {measurement_type} measurement {measurement_id} for {target}")
+                    self._save_measurement_info(measurement_id, measurement_config, target)
+                    return True
+                else:
+                    logger.error(f"Measurement created for {target}, but failed to extract measurement ID")
+                    return False
+            else:
+                logger.error(f"Failed to create measurement for {target}: {response}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Exception in _create_single_measurement: {e}")
+            return False
+
+    def _create_measurement_object(self, config: Dict[str, Any], measurement_type: str, target: str):
+        try:
+            if measurement_type == 'ping':
+                return Ping(
+                    af=config.get('af'),
+                    target=target,
+                    description=config.get('description', f'Sintra ping to {target}'),
+                    interval=config.get('interval')
+                )
+            elif measurement_type == 'traceroute':
+                traceroute_kwargs = {
+                    "af": config.get('af'),
+                    "target": target,
+                    "description": config.get('description', f'Sintra traceroute to {target}'),
+                    "interval": config.get('interval')
+                }
+                
+                if 'protocol' in config:
+                    protocol = config.get('protocol', 'ICMP').upper()
+                    if protocol in ['ICMP', 'TCP', 'UDP']:
+                        traceroute_kwargs["protocol"] = protocol
+                    else:
+                        logger.warning(f"Invalid protocol {protocol}, using ICMP")
+                        
+                return Traceroute(**traceroute_kwargs)
+            else:
+                logger.error(f"Unsupported measurement type: {measurement_type}")
+                return None
+        except Exception as e:
+            logger.error(f"Failed to create measurement object: {e}")
+            return None
+
+    def _create_source_configuration(self, config: Dict[str, Any]):
+        try:
+            probe_config = config.get('probes', {})
+            
+            if 'country' in probe_config and 'area' in probe_config:
+                raise ValueError("Both 'country' and 'area' cannot be specified in probes config")
+            
+            if 'country' in probe_config:
+                return AtlasSource(
+                    type="country",
+                    value=probe_config.get('country'),
+                    requested=probe_config.get('count', 5)
+                )
+            else:
+                return AtlasSource(
+                    type="area",
+                    value=probe_config.get('area', 'WW'),
+                    requested=probe_config.get('count', 5)
+                )
+        except Exception as e:
+            logger.error(f"Failed to create source configuration: {e}")
+            return None
+
+    def _extract_measurement_id(self, response):
+        try:
+            if isinstance(response, dict) and "measurements" in response:
+                return response["measurements"][0]
+            elif isinstance(response, list) and len(response) > 0:
+                return response[0][0] if isinstance(response[0], list) else response[0]
+            else:
+                logger.warning(f"Unexpected response format: {response}")
+                return None
+        except (IndexError, KeyError, TypeError) as e:
+            logger.error(f"Failed to extract measurement ID from response: {e}")
+            return None
+
     # This method fetches measurements based on the provided measurement ID
     # If no measurement ID is provided, it will load the fetch configuration
     # and fetch all measurements specified in the configuration or saved measurements.
     def fetch_measurements(self, measurement_id=None):
         logger.info("Fetching measurements...")
-        self.created_measurements_dir.mkdir(parents=True, exist_ok=True)
-        self.fetched_measurements_dir.mkdir(parents=True, exist_ok=True)
         
-        if measurement_id:
-            measurement_ids = [measurement_id]
-        else:
-            # If no measurement ID is provided, load the fetch configuration
-            # and get the measurement IDs from the configuration or saved measurements
-            self.load_config("fetch")
-            measurement_ids = []
-            if self.fetch_config is not None:
-                measurement_ids = self.fetch_config.get('measurement_ids', [])
+        try:
+            self._ensure_directories()
+            
+            if measurement_id:
+                measurement_ids = [measurement_id]
+                logger.info(f"Fetching specific measurement: {measurement_id}")
+            else:
+                # Load fetch configuration and get measurement IDs
+                try:
+                    self.load_config("fetch")
+                    measurement_ids = []
+                    if self.fetch_config is not None:
+                        measurement_ids = self.fetch_config.get('measurement_ids', [])
+                    
+                    if not measurement_ids:
+                        measurement_ids = self._get_saved_measurement_ids()
+                        logger.info(f"Using saved measurement IDs: {len(measurement_ids)} found")
+                    else:
+                        logger.info(f"Using configuration measurement IDs: {len(measurement_ids)} found")
+                        
+                except Exception as e:
+                    logger.warning(f"Failed to load fetch config: {e}. Trying saved measurements...")
+                    measurement_ids = self._get_saved_measurement_ids()
             
             if not measurement_ids:
-                measurement_ids = self._get_saved_measurement_ids()
-        
-        for measurement_id in measurement_ids:
-            logger.info(f"Fetching ALL results for measurement {measurement_id}...")
+                logger.warning("No measurement IDs found to fetch")
+                return
+            
+            successful_count = 0
+            failed_count = 0
+            
+            for measurement_id in measurement_ids:
+                try:
+                    success = self._fetch_single_measurement(measurement_id)
+                    if success:
+                        successful_count += 1
+                    else:
+                        failed_count += 1
+                except Exception as e:
+                    failed_count += 1
+                    logger.error(f"Failed to fetch measurement {measurement_id}: {e}")
+            
+            logger.info(f"Fetch complete: {successful_count} successful, {failed_count} failed")
+            
+        except Exception as e:
+            logger.error(f"Error in fetch_measurements: {e}")
+            raise
+
+    def _fetch_single_measurement(self, measurement_id: int) -> bool:
+        try:
+            logger.info(f"Fetching results for measurement {measurement_id}...")
             
             # Prepare the request parameters for fetching results
             kwargs = {
@@ -213,9 +356,7 @@ class SintraMeasurementClient:
                 "format": "json"
             }
             
-            # If fetch_config is provided, use it to set the start and stop times
-            # and any other fetch settings
-            # This will allow for more flexible fetching of results
+            # Apply fetch settings if available
             if hasattr(self, 'fetch_config') and self.fetch_config:
                 fetch_settings = self.fetch_config.get('fetch_settings', {})
                 
@@ -226,16 +367,27 @@ class SintraMeasurementClient:
                 if 'probe_ids' in fetch_settings:
                     kwargs['probe_ids'] = fetch_settings['probe_ids']
             
+            # Execute the fetch request
             is_success, results = AtlasResultsRequest(**kwargs).create()
             
             if is_success:
+                if not results:
+                    logger.warning(f"No results returned for measurement {measurement_id}")
+                    return False
+                
                 logger.info(f"Retrieved {len(results)} results for measurement {measurement_id}")
                 processed_results = self._process_all_results(results, measurement_id)
                 self._save_results(measurement_id, processed_results)
-                logger.info(f"Saved ALL results for measurement {measurement_id}")
+                logger.info(f"Saved results for measurement {measurement_id}")
+                return True
             else:
-                logger.error(f"Failed to fetch results for measurement {measurement_id}")
-    
+                logger.error(f"Failed to fetch results for measurement {measurement_id}: {results}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Exception fetching measurement {measurement_id}: {e}")
+            return False
+
     # This method saves the measurement information to a JSON file
     # It includes the measurement ID, target, type, created_at timestamp, and configuration.
     def _save_measurement_info(self, measurement_id, config, target):

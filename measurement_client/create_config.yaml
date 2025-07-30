@@ -2,8 +2,8 @@
 # It defines various network measurements to be performed
 measurements:
   - type: ping # Measurement type: ping or traceroute
-    target: github.com # Target domain or IP address
-    description: "Ping measurement to GitHub from Japan"  # Description of the measurement
+    target: 77.91.138.212 
+    description: "Ping measurement to Palestine from Japan"  # Description of the measurement
     interval: 300  # Interval in seconds between measurements
     duration_hours: 1 # Total duration in hours
     af: 4  # Address family (4 for IPv4, 6 for IPv6)
@@ -12,15 +12,15 @@ measurements:
       count: 10 # Number of probes to use
 
   - type: traceroute # Measurement type: ping or traceroute
-    target: discord.com # Target domain or IP address
-    description: "Traceroute to Discord from India" # Description of the measurement
+    target: 103.68.48.6
+    description: "Traceroute to Chennai from Sri Lanka" # Description of the measurement
     protocol: "ICMP" # Protocol to use (ICMP, TCP, UDP)
     interval: 900  # Interval in seconds between measurements
     duration_hours: 2 # Total duration in hours
     af: 4 # Address family (4 for IPv4, 6 for IPv6)
     probes:
-      country: "IN" # Country code for probe location (ISO 3166-1 alpha-2)
-      count: 10 # Number of probes to use
+      country: "LK" # Country code for probe location (ISO 3166-1 alpha-2)
+      count: 5 # Number of probes to use
 
   # # Example with additional parameters
   # - type: ping
