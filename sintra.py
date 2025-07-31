@@ -87,6 +87,9 @@ def create_parser():
             help='Show alerts for specific measurement ID only'
         )
     
+    # Plots command
+    plots_parser = subparsers.add_parser('plots', help='Generate visualization plots for all measurements')
+    
     return parser
 
 # This function handles the create measurements command
@@ -297,6 +300,38 @@ def handle_alerts_command(args):
         raise
 
 
+def handle_plots_command(args):
+    """Handle the plots command for generating visualizations."""
+    try:
+        logger.info("=== Generating Visualization Plots ===")
+        
+        # Import here to avoid requiring matplotlib if not using plots
+        try:
+            from visualization.plotter import SintraPlotter
+        except ImportError as e:
+            logger.error("Failed to import plotting dependencies. Please install matplotlib and seaborn:")
+            logger.error("pip install matplotlib seaborn")
+            return
+        
+        # Initialize plotter
+        plotter = SintraPlotter()
+        
+        # Check if results exist
+        results_dir = Path("measurement_client/results/fetched_measurements")
+        
+        if not results_dir.exists() or not list(results_dir.glob("measurement_*_result.json")):
+            logger.error("No measurement results found. Please run 'sintra fetch' first.")
+            return
+        
+        # Generate plots for all measurements
+        plotter.plot_all_measurements()
+        
+        logger.info("Plot generation complete. Check 'visualization/plots/' directory for results.")
+        
+    except Exception as e:
+        logger.error(f"Failed to generate plots: {e}")
+        raise
+
 # Main entry point for the Sintra
 def main():
     parser = create_parser()
@@ -323,6 +358,9 @@ def main():
 
         elif args.command == 'alerts' or args.command == 'alert':
             handle_alerts_command(args)
+        
+        elif args.command == 'plots':
+            handle_plots_command(args)
             
         else:
             parser.print_help()
