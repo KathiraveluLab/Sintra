@@ -572,7 +572,7 @@ class SintraMeasurementClient:
         """Finalize ping statistics for a probe."""
         rtts = probe_result["latency_stats"]["rtts"]
         if rtts:
-            probe_result["latency_stats"]["avg"] = sum(rtts) / len(rtts)
+            probe_result["latency_stats"]["avg"] = mean(rtts)
             probe_result["latency_stats"]["min"] = min(rtts)
             probe_result["latency_stats"]["max"] = max(rtts)
         else:
