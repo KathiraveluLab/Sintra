@@ -137,7 +137,7 @@ class TraceroutePlotter:
                 probe_id = entry["probe_id"]
                 probe_data[probe_id].append(entry)
             
-            colors = plt.get_cmap('viridis')(np.linspace(0, 1, len(probe_data)))
+            colors = plt.colormaps['viridis'](np.linspace(0, 1, len(probe_data)))
             
             for color, (probe_id, probe_entries) in zip(colors, probe_data.items()):
                 timestamps = []
