@@ -193,7 +193,7 @@ class TraceroutePlotter:
                 probe_data[probe_id].append(entry)
             
             y_offset = 0
-            colors = plt.cm.get_cmap('Set3')(np.linspace(0, 1, len(probe_data)))
+            colors = plt.colormaps['Set3'](np.linspace(0, 1, len(probe_data)))
             
             for color, (probe_id, probe_entries) in zip(colors, probe_data.items()):
                 timestamps = []
