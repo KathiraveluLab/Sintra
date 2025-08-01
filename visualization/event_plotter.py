@@ -224,7 +224,7 @@ class EventPlotter:
             # Create stacked bar chart
             anomaly_types = list(set(atype for region_data in region_impacts.values() 
                                    for atype in region_data.keys()))
-            colors = plt.cm.get_cmap('viridis')(np.linspace(0, 1, len(anomaly_types)))
+            colors = plt.colormaps['viridis'](np.linspace(0, 1, len(anomaly_types)))
             
             bottom = np.zeros(len(regions))
             for i, atype in enumerate(anomaly_types):
