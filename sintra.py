@@ -384,16 +384,19 @@ def plot():
     """Generate both measurement performance and anomaly detection plots."""
     from visualization.measurement_plotter import MeasurementPlotter
     from visualization.event_plotter import EventPlotter
+    from visualization.traceroute_plotter import TraceroutePlotter
     
     logger.info("Creating comprehensive network analysis plots...")
     
-    # Always generate measurement plots (shows actual network performance)
-    logger.info("1/2 Creating measurement performance plots...")
+    logger.info("1/3 Creating measurement performance plots...")
     measurement_plotter = MeasurementPlotter()
     measurement_plotter.process_all_measurement_files()
     
-    # Generate anomaly plots only if anomalies exist
-    logger.info("2/2 Checking for anomalies and creating detection plots...")
+    logger.info("2/3 Creating traceroute timeline analysis...")
+    traceroute_plotter = TraceroutePlotter()
+    traceroute_plotter.process_all_traceroute_files()
+    
+    logger.info("3/3 Checking for anomalies and creating detection plots...")
     event_plotter = EventPlotter()
     event_plotter.process_all_event_files()
     

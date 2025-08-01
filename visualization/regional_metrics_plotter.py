@@ -175,3 +175,74 @@ class RegionalMetricsPlotter:
         plt.tight_layout()
         plt.savefig(output_dir / "4_per_probe_latency_distribution.png", dpi=300, bbox_inches='tight')
         plt.close()
+
+    @staticmethod
+    def plot_traceroute_path_diversity(results: List[Dict], output_dir: Path) -> None:
+        plt.figure(figsize=(12, 8))
+        
+        regional_traceroute_data = defaultdict(list)
+        logger.info(f"Processing {len(results)} results for traceroute path diversity")
+        
+        for result in results:
+            result_type = result.get("measurement_type")
+            if result_type != "traceroute":
+                continue
+                
+            country = result.get("probe_country")
+            hops_count = result.get("hops_count", 0)
+            
+            # Try alternative field names
+            if hops_count == 0:
+                hops = result.get("hops", []) or result.get("result", [])
+                hops_count = len(hops) if hops else 0
+            
+            logger.debug(f"Traceroute result: country={country}, hops_count={hops_count}")
+            
+            if country and country != "Unknown" and hops_count > 0:
+                regional_traceroute_data[country].append(hops_count)
+        
+        logger.info(f"Found traceroute data for {len(regional_traceroute_data)} countries")
+        
+        if not regional_traceroute_data:
+            plt.text(0.5, 0.5, 'No regional traceroute data available\nCheck if measurements contain traceroute results', 
+                    transform=plt.gca().transAxes, ha='center', va='center', fontsize=14)
+            plt.title('Regional Traceroute Path Diversity - No Data')
+            logger.warning("No regional traceroute data found")
+        else:
+            regions = []
+            avg_hops = []
+            probe_counts = []
+            
+            for country, hop_counts in regional_traceroute_data.items():
+                if hop_counts:
+                    regions.append(country)
+                    avg_hops.append(mean(hop_counts))
+                    probe_counts.append(len(hop_counts))
+            
+            if regions:
+                sorted_data = sorted(zip(regions, avg_hops, probe_counts), key=lambda x: x[1], reverse=True)
+                regions, avg_hops, probe_counts = zip(*sorted_data)
+                
+                colors = ['red' if hops > 20 else 'orange' if hops > 15 else 'green' 
+                         for hops in avg_hops]
+                
+                bars = plt.bar(range(len(regions)), avg_hops, color=colors, alpha=0.7)
+                
+                for i, (bar, hops, count) in enumerate(zip(bars, avg_hops, probe_counts)):
+                    plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.3,
+                            f'{hops:.1f}\n({count} probes)', ha='center', va='bottom', fontweight='bold')
+                
+                plt.xlabel('Region')
+                plt.ylabel('Average Hop Count')
+                plt.title('Regional Traceroute Path Length Analysis')
+                plt.xticks(range(len(regions)), regions, rotation=45, ha='right')
+                
+                plt.axhline(y=15, color='orange', linestyle='--', alpha=0.7, label='15 hops threshold')
+                plt.axhline(y=20, color='red', linestyle='--', alpha=0.7, label='20 hops threshold')
+                plt.legend()
+                logger.info(f"Created traceroute path diversity plot for {len(regions)} regions")
+        
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(output_dir / "5_regional_traceroute_path_diversity.png", dpi=300, bbox_inches='tight')
+        plt.close()

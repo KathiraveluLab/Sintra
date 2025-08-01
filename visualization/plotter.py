@@ -10,7 +10,6 @@ from statistics import stdev, mean
 from collections import defaultdict
 
 class SintraPlotter:
-    """Regional measurement analysis plotter for each measurement."""
     
     def __init__(self, 
                  events_dir: str = "event_manager/results",
@@ -21,7 +20,6 @@ class SintraPlotter:
         self.results_dir = Path(results_dir)
         self.output_dir = Path(output_dir)
         
-        # Create output directory
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         plt.style.use('default')
@@ -30,7 +28,6 @@ class SintraPlotter:
         logger.info(f"SintraPlotter initialized with output dir: {self.output_dir}")
 
     def plot_all_measurements(self) -> None:
-        """Generate regional plots for each measurement in its own directory."""
         logger.info("Generating regional analysis plots for each measurement...")
         
         result_files = list(self.results_dir.glob("measurement_*_result.json"))
@@ -52,7 +49,6 @@ class SintraPlotter:
         logger.info(f"Regional plot generation complete: {processed_count} measurements processed")
 
     def _extract_measurement_id(self, filename: str) -> Optional[str]:
-        """Extract measurement ID from filename like 'measurement_12345_result.json'."""
         try:
             parts = filename.split('_')
             if len(parts) >= 3 and parts[0] == 'measurement' and parts[-1] == 'result.json':
@@ -63,14 +59,11 @@ class SintraPlotter:
             return None
 
     def _create_regional_plots_for_measurement(self, measurement_id: str) -> None:
-        """Create region-based plots for a specific measurement in its own directory."""
         logger.info(f"Generating regional plots for measurement {measurement_id}")
         
-        # Create measurement-specific directory
         measurement_dir = self.output_dir / f"measurement_{measurement_id}"
         measurement_dir.mkdir(parents=True, exist_ok=True)
         
-        # Load measurement and event data
         measurement_data = self._load_measurement_data(measurement_id)
         event_data = self._load_event_data(measurement_id)
         
@@ -85,7 +78,6 @@ class SintraPlotter:
             logger.warning(f"No results in measurement {measurement_id}")
             return
         
-        # Filter for ping results only for regional analysis
         ping_results = [r for r in results if r.get("measurement_type") == "ping"]
         
         if not ping_results:
@@ -94,12 +86,10 @@ class SintraPlotter:
         
         logger.info(f"Processing {len(ping_results)} ping results for regional analysis")
         
-        # Import plotters locally to avoid circular imports
         from .regional_latency_plotter import RegionalLatencyPlotter
         from .regional_metrics_plotter import RegionalMetricsPlotter
         from .anomaly_summary_plotter import AnomalySummaryPlotter
         
-        # Create regional plots
         RegionalLatencyPlotter.plot_latency_trend(ping_results, events, measurement_dir)
         RegionalMetricsPlotter.plot_packet_loss(ping_results, measurement_dir)
         RegionalMetricsPlotter.plot_jitter(ping_results, measurement_dir)
@@ -109,10 +99,8 @@ class SintraPlotter:
         logger.info(f"Regional plots saved in directory: {measurement_dir}")
 
     def _plot_regional_packet_loss(self, results: List[Dict], output_dir: Path) -> None:
-        """Regional Packet Loss - Bar chart showing average packet loss per region."""
         plt.figure(figsize=(12, 8))
         
-        # Group packet loss by country
         regional_losses = defaultdict(list)
         for result in results:
             if result.get("measurement_type") == "ping":
@@ -134,17 +122,14 @@ class SintraPlotter:
                     avg_losses.append(mean(losses))
             
             if regions:
-                # Sort by packet loss (highest first)
                 sorted_data = sorted(zip(regions, avg_losses), key=lambda x: x[1], reverse=True)
                 regions, avg_losses = zip(*sorted_data)
                 
-                # Color coding: Red >10%, Yellow 5-10%, Green <5%
                 colors = ['red' if loss > 10 else 'orange' if loss > 5 else 'green' 
                          for loss in avg_losses]
                 
                 bars = plt.bar(range(len(regions)), avg_losses, color=colors, alpha=0.7)
                 
-                # Add value labels
                 for bar, loss in zip(bars, avg_losses):
                     if loss > 0.1:
                         plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.2,
@@ -155,7 +140,6 @@ class SintraPlotter:
                 plt.title('Regional Packet Loss Comparison')
                 plt.xticks(range(len(regions)), regions, rotation=45, ha='right')
                 
-                # Add threshold lines
                 plt.axhline(y=5, color='orange', linestyle='--', alpha=0.7, label='5% threshold')
                 plt.axhline(y=10, color='red', linestyle='--', alpha=0.7, label='10% threshold')
                 plt.legend()
@@ -166,10 +150,8 @@ class SintraPlotter:
         plt.close()
 
     def _plot_regional_jitter(self, results: List[Dict], output_dir: Path) -> None:
-        """Regional Jitter - Bar chart showing average jitter per region."""
         plt.figure(figsize=(12, 8))
         
-        # Calculate jitter by country
         regional_jitters = defaultdict(list)
         for result in results:
             if result.get("measurement_type") == "ping":
@@ -193,17 +175,14 @@ class SintraPlotter:
                     avg_jitters.append(mean(jitters))
             
             if regions:
-                # Sort by jitter (highest first)
                 sorted_data = sorted(zip(regions, avg_jitters), key=lambda x: x[1], reverse=True)
                 regions, avg_jitters = zip(*sorted_data)
                 
-                # Color coding for jitter
                 colors = ['red' if jitter > 50 else 'orange' if jitter > 20 else 'green' 
                          for jitter in avg_jitters]
                 
                 bars = plt.bar(range(len(regions)), avg_jitters, color=colors, alpha=0.7)
                 
-                # Add value labels
                 for bar, jitter in zip(bars, avg_jitters):
                     if jitter > 1:
                         plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
@@ -214,7 +193,6 @@ class SintraPlotter:
                 plt.title('Regional Jitter Analysis')
                 plt.xticks(range(len(regions)), regions, rotation=45, ha='right')
                 
-                # Add threshold lines
                 plt.axhline(y=20, color='orange', linestyle='--', alpha=0.7, label='20ms threshold')
                 plt.axhline(y=50, color='red', linestyle='--', alpha=0.7, label='50ms threshold')
                 plt.legend()
@@ -225,10 +203,8 @@ class SintraPlotter:
         plt.close()
 
     def _plot_per_probe_latency_distribution(self, results: List[Dict], output_dir: Path) -> None:
-        """Per-Probe Latency Distribution - Box plot grouped by region."""
         plt.figure(figsize=(14, 8))
         
-        # Group latencies by country and probe
         regional_probe_data = defaultdict(lambda: defaultdict(list))
         for result in results:
             if result.get("measurement_type") == "ping":
@@ -244,7 +220,6 @@ class SintraPlotter:
                     transform=plt.gca().transAxes, ha='center', va='center', fontsize=14)
             plt.title('Per-Probe Latency Distribution')
         else:
-            # Prepare data for box plot
             all_data = []
             labels = []
             colors = []
@@ -265,7 +240,6 @@ class SintraPlotter:
             if all_data:
                 box_plot = plt.boxplot(all_data, patch_artist=True)
                 
-                # Color the boxes
                 for patch, color in zip(box_plot['boxes'], colors):
                     patch.set_facecolor(color)
                     patch.set_alpha(0.7)
@@ -274,7 +248,6 @@ class SintraPlotter:
                 plt.title('Per-Probe Latency Distribution (Grouped by Region)')
                 plt.xticks(range(1, len(labels) + 1), labels, rotation=45, ha='right')
                 
-                # Add threshold lines
                 plt.axhline(y=100, color='orange', linestyle='--', alpha=0.7, label='100ms threshold')
                 plt.axhline(y=200, color='red', linestyle='--', alpha=0.7, label='200ms threshold')
                 plt.legend()
@@ -285,7 +258,6 @@ class SintraPlotter:
         plt.close()
 
     def _plot_anomaly_type_summary(self, events: List[Dict], output_dir: Path) -> None:
-        """Anomaly Type Summary - Bar chart showing count of each anomaly type."""
         plt.figure(figsize=(12, 6))
         
         if not events:
@@ -293,7 +265,6 @@ class SintraPlotter:
                     transform=plt.gca().transAxes, ha='center', va='center', fontsize=14)
             plt.title('Anomaly Type Summary')
         else:
-            # Count anomalies by type
             anomaly_counts = defaultdict(int)
             for event in events:
                 anomaly_type = event.get("anomaly") or event.get("type")
@@ -304,7 +275,6 @@ class SintraPlotter:
                 anomaly_types = list(anomaly_counts.keys())
                 counts = list(anomaly_counts.values())
                 
-                # Color mapping for different anomaly types
                 color_map = {
                     'latency_spike': 'red',
                     'packet_loss': 'orange',
@@ -320,7 +290,6 @@ class SintraPlotter:
                 
                 bars = plt.bar(anomaly_types, counts, color=colors, alpha=0.7)
                 
-                # Add value labels
                 for bar, count in zip(bars, counts):
                     plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
                             str(count), ha='center', va='bottom', fontweight='bold')
@@ -340,7 +309,6 @@ class SintraPlotter:
         plt.close()
 
     def _load_measurement_data(self, measurement_id: str) -> Optional[Dict]:
-        """Load measurement data from results directory."""
         result_file = self.results_dir / f"measurement_{measurement_id}_result.json"
         
         try:
@@ -355,7 +323,6 @@ class SintraPlotter:
             return None
 
     def _load_event_data(self, measurement_id: str) -> Optional[Dict]:
-        """Load event data from events directory."""
         possible_files = [
             self.events_dir / f"{measurement_id}.json",
             self.events_dir / f"measurement_{measurement_id}.json",
@@ -377,7 +344,6 @@ class SintraPlotter:
         return None
     
     def _extract_ping_data(self, results: List[Dict]) -> Dict[str, Any]:
-        """Extract ping data for plotting."""
         ping_data = {
             "probe_ids": [],
             "latencies": [],
@@ -407,7 +373,6 @@ class SintraPlotter:
         return ping_data
 
     def _extract_traceroute_data(self, results: List[Dict]) -> Dict[str, Any]:
-        # Extract traceroute data for plotting.
         traceroute_data = {
             "probe_ids": [],
             "hop_counts": [],
@@ -422,13 +387,11 @@ class SintraPlotter:
                 country = result.get("probe_country")
                 probe_id = result.get("probe_id")
                 
-                # Only add if we have valid data
                 if probe_id is not None:
                     traceroute_data["probe_ids"].append(probe_id)
                     traceroute_data["hop_counts"].append(hops_count)
                     traceroute_data["countries"].append(country)
                     
-                    # Extract route (IP addresses)
                     route = []
                     if isinstance(hops, list):
                         for hop in hops:
@@ -440,13 +403,11 @@ class SintraPlotter:
         return traceroute_data
 
     def _plot_probe_country_distribution(self, data: Dict, output_dir: Path) -> None:
-        # Probe distribution by country.
         plt.figure(figsize=(12, 6))
         
         countries = data.get("countries", [])
         logger.info(f"Countries data: {countries}")
         
-        # Filter out None and empty values
         valid_countries = [country for country in countries if country and str(country).strip() and str(country) != 'None']
         logger.info(f"Valid countries: {valid_countries}")
         
@@ -479,10 +440,8 @@ class SintraPlotter:
         plt.close()
 
     def _create_anomaly_summary_plot(self, measurement_id: str, event_data: Dict, output_dir: Path) -> None:
-        # Anomaly Summary - Bar chart.
         plt.figure(figsize=(10, 6))
         
-        # Debug: log what we have in event_data
         logger.info(f"Event data keys for measurement {measurement_id}: {list(event_data.keys()) if event_data else 'No event data'}")
         
         if not event_data or not event_data.get("events"):
@@ -513,7 +472,6 @@ class SintraPlotter:
                     anomaly_types = list(anomaly_counts.keys())
                     counts = list(anomaly_counts.values())
                     
-                    # Color mapping for different anomaly types
                     color_map = {
                         'latency_spike': 'red',
                         'packet_loss': 'orange',
@@ -528,7 +486,6 @@ class SintraPlotter:
                     
                     bars = plt.bar(anomaly_types, counts, color=colors, alpha=0.7)
                     
-                    # Add value labels
                     for bar, count in zip(bars, counts):
                         plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
                                 str(count), ha='center', va='bottom')
@@ -548,7 +505,6 @@ class SintraPlotter:
         plt.close()
 
     def _plot_severity_distribution(self, ax, all_events):
-        # Plot distribution of anomaly severities.
         severities = [e.get("severity") for e in all_events if e.get("severity")]
         
         if not severities:
@@ -572,7 +528,6 @@ class SintraPlotter:
         ax.set_title('Anomaly Severity Distribution')
 
     def _plot_measurement_anomaly_stats(self, ax, measurements_with_anomalies):
-        # Plot measurement anomaly statistics.
         total_measurements = len(list(self.results_dir.glob("measurement_*_result.json")))
         measurements_clean = total_measurements - measurements_with_anomalies
         
@@ -585,7 +540,6 @@ class SintraPlotter:
         ax.set_title('Measurements Overview')
 
     def _plot_top_affected_probes(self, ax, all_events):
-        # Plot top probes affected by anomalies.
         probe_counts = {}
         for event in all_events:
             probe_id = event.get("probe_id")
@@ -598,7 +552,6 @@ class SintraPlotter:
             ax.set_title('Top Affected Probes')
             return
         
-        # Get top 10 probes
         top_probes = sorted(probe_counts.items(), key=lambda x: x[1], reverse=True)[:10]
         
         if top_probes:
@@ -608,7 +561,6 @@ class SintraPlotter:
             ax.set_title('Top 10 Affected Probes')
 
     def _plot_country_distribution(self, ax, all_probe_data):
-        # Plot probe distribution by country.
         countries = [data.get("country") for data in all_probe_data.values() 
                     if data.get("country")]
         
@@ -622,7 +574,6 @@ class SintraPlotter:
         for country in countries:
             country_counts[country] = country_counts.get(country, 0) + 1
         
-        # Get top countries
         top_countries = sorted(country_counts.items(), key=lambda x: x[1], reverse=True)[:10]
         
         if top_countries:
@@ -634,7 +585,6 @@ class SintraPlotter:
             plt.setp(ax.get_xticklabels(), rotation=45, ha='right')
 
     def _plot_probes_per_measurement(self, ax):
-        # Plot number of probes per measurement.
         probe_counts = []
         
         for result_file in self.results_dir.glob("measurement_*_result.json"):
