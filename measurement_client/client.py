@@ -613,7 +613,8 @@ class SintraMeasurementClient:
                         # Calculate jitter (standard deviation of RTTs)
                         rtts = latency_stats.get("rtts", [])
                         if len(rtts) > 1:
-                            import statistics
+                            from statistics import stdev
+                            jitters.append(stdev([float(rtt) for rtt in rtts]))
                             jitters.append(statistics.stdev([float(rtt) for rtt in rtts]))
                         else:
                             jitters.append(0.0)
