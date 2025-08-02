@@ -15,6 +15,9 @@ from measurement_client.processors import (
     process_ping_result, process_traceroute_result, 
     process_default_result
 )
+from collections import defaultdict
+from statistics import mean, median
+import requests
 
 class SintraMeasurementClient:
     def __init__(self, config_path=None, create_config="measurement_client/create_config.yaml", fetch_config="measurement_client/fetch_config.yaml"):
@@ -26,6 +29,9 @@ class SintraMeasurementClient:
             self.api_key = os.getenv('RIPE_ATLAS_API_KEY')
             if not self.api_key:
                 raise ValueError("RIPE_ATLAS_API_KEY not found in environment variables")
+            
+            # RIPE Atlas API base URL
+            self.base_url = "https://atlas.ripe.net/api/v2"
             
             # Configuration paths
             self.config_path = config_path
@@ -350,6 +356,12 @@ class SintraMeasurementClient:
         try:
             logger.info(f"Fetching results for measurement {measurement_id}...")
             
+            # Get measurement info first to understand the type
+            measurement_info = self._get_measurement_info(measurement_id)
+            if not measurement_info:
+                logger.error(f"Could not get measurement info for {measurement_id}")
+                return False
+            
             # Prepare the request parameters for fetching results
             kwargs = {
                 "msm_id": measurement_id,
@@ -375,10 +387,12 @@ class SintraMeasurementClient:
                     logger.warning(f"No results returned for measurement {measurement_id}")
                     return False
                 
-                logger.info(f"Retrieved {len(results)} results for measurement {measurement_id}")
-                processed_results = self._process_all_results(results, measurement_id)
+                logger.info(f"Retrieved {len(results)} raw results for measurement {measurement_id}")
+                
+                # Process results with regional information
+                processed_results = self._process_all_results_with_regions(results, measurement_id, measurement_info)
                 self._save_results(measurement_id, processed_results)
-                logger.info(f"Saved results for measurement {measurement_id}")
+                logger.info(f"Saved results with regional analysis for measurement {measurement_id}")
                 return True
             else:
                 logger.error(f"Failed to fetch results for measurement {measurement_id}: {results}")
@@ -387,6 +401,266 @@ class SintraMeasurementClient:
         except Exception as e:
             logger.error(f"Exception fetching measurement {measurement_id}: {e}")
             return False
+
+    def _get_measurement_info(self, measurement_id: int) -> Optional[Dict[str, Any]]:
+        """Get measurement information from RIPE Atlas API."""
+        try:
+            measurement_url = f"{self.base_url}/measurements/{measurement_id}/"
+            response = requests.get(measurement_url)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as e:
+            logger.error(f"Error getting measurement info for {measurement_id}: {e}")
+            return None
+
+    def _process_all_results_with_regions(self, results, measurement_id, measurement_info):
+        """Process results with enhanced regional information and analysis."""
+        processed = {
+            "measurement_id": measurement_id,
+            "measurement_type": measurement_info.get("type"),
+            "target": measurement_info.get("target"),
+            "description": measurement_info.get("description"),
+            "fetched_at": datetime.utcnow().isoformat(),
+            "results_count": len(results),
+            "summary": {
+                "total_probes": len(set(result.get("prb_id") for result in results)),
+                "total_results": len(results),
+                "time_range": {
+                    "start": min(result.get("timestamp", 0) for result in results) if results else None,
+                    "end": max(result.get("timestamp", 0) for result in results) if results else None
+                }
+            },
+            "results": [],
+            "regional_analysis": {}
+        }
+
+        # Get unique probe IDs and fetch their information in batches
+        probe_ids = list(set(result.get("prb_id") for result in results if result.get("prb_id")))
+        logger.info(f"Fetching regional information for {len(probe_ids)} unique probes...")
+        
+        probe_info_cache = self._batch_fetch_probe_info(probe_ids)
+        
+        # Process individual results with regional information
+        probe_results = {}
+        regional_data = defaultdict(list)
+        
+        for result in results:
+            probe_id = result.get("prb_id")
+            measurement_type = measurement_info.get("type")
+            
+            if probe_id not in probe_results:
+                probe_info = probe_info_cache.get(probe_id, {})
+                country = probe_info.get("country", "Unknown")
+                country_code = probe_info.get("country_code")
+                
+                probe_results[probe_id] = {
+                    "measurement_type": measurement_type,
+                    "measurement_id": measurement_id,
+                    "probe_id": probe_id,
+                    "probe_country": country,
+                    "probe_country_code": country_code,
+                    "probe_asn": probe_info.get("asn"),
+                    "probe_latitude": probe_info.get("latitude"),
+                    "probe_longitude": probe_info.get("longitude"),
+                    "source_address": result.get("from"),
+                    "target_address": result.get("dst_addr"),
+                    "target_name": result.get("dst_name"),
+                    "timestamp": datetime.utcfromtimestamp(result.get("timestamp", 0)).isoformat() if result.get("timestamp") else None,
+                    "firmware_version": result.get("fw"),
+                    "protocol": result.get("proto", "ICMP"),
+                    "address_family": result.get("af", 4)
+                }
+                
+                # Initialize measurement-specific fields
+                if measurement_type == "ping":
+                    probe_results[probe_id].update({
+                        "latency_stats": {"rtts": [], "avg": None, "min": None, "max": None},
+                        "packet_loss_percentage": 0,
+                        "packets_sent": 0,
+                        "packets_received": 0
+                    })
+                elif measurement_type == "traceroute":
+                    probe_results[probe_id].update({
+                        "hops": [],
+                        "hops_count": 0
+                    })
+
+            # Process measurement data
+            if measurement_type == "ping" and "result" in result:
+                self._process_ping_data(result, probe_results[probe_id])
+            elif measurement_type == "traceroute" and "result" in result:
+                self._process_traceroute_data(result, probe_results[probe_id])
+
+        # Finalize individual probe results
+        for probe_id, probe_result in probe_results.items():
+            if probe_result.get("measurement_type") == "ping":
+                self._finalize_ping_stats(probe_result)
+            
+            # Group by region for regional analysis
+            country = probe_result.get("probe_country", "Unknown")
+            if country != "Unknown":
+                regional_data[country].append(probe_result)
+
+        # Perform regional analysis
+        processed["regional_analysis"] = self._compute_regional_analysis(regional_data)
+        processed["results"] = list(probe_results.values())
+        
+        logger.info(f"Processed {len(probe_results)} probe results with regional analysis for {len(regional_data)} regions")
+        return processed
+
+    def _batch_fetch_probe_info(self, probe_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        """Fetch probe information in batches to get regional data efficiently."""
+        probe_info_cache = {}
+        batch_size = 100  # RIPE Atlas API limit
+        
+        for i in range(0, len(probe_ids), batch_size):
+            batch = probe_ids[i:i + batch_size]
+            try:
+                # Use bulk probe API endpoint
+                probe_ids_str = ','.join(map(str, batch))
+                probe_url = f"{self.base_url}/probes/?id__in={probe_ids_str}"
+                
+                response = requests.get(probe_url)
+                response.raise_for_status()
+                probe_data = response.json()
+                
+                # Process batch results
+                for probe in probe_data.get("results", []):
+                    probe_id = probe.get("id")
+                    if probe_id:
+                        probe_info_cache[probe_id] = {
+                            "country_code": probe.get("country_code"),
+                            "country": self._get_country_name(probe.get("country_code")),
+                            "asn": probe.get("asn_v4"),
+                            "latitude": probe.get("latitude"),
+                            "longitude": probe.get("longitude"),
+                            "status": probe.get("status", {}).get("name") if probe.get("status") else None
+                        }
+                
+                logger.info(f"Fetched probe info for batch {i//batch_size + 1}/{(len(probe_ids) + batch_size - 1)//batch_size}")
+                
+            except requests.RequestException as e:
+                logger.warning(f"Error fetching probe info batch: {e}")
+                # Fall back to individual requests for this batch
+                for probe_id in batch:
+                    if probe_id not in probe_info_cache:
+                        probe_info_cache[probe_id] = self._get_probe_info(probe_id)
+        
+        return probe_info_cache
+
+    def _process_ping_data(self, result: Dict, probe_result: Dict) -> None:
+        """Process ping data for a single result."""
+        ping_results = result.get("result", [])
+        rtts = [r.get("rtt") for r in ping_results if r.get("rtt") is not None]
+        
+        probe_result["latency_stats"]["rtts"].extend(rtts)
+        probe_result["packets_sent"] += len(ping_results)
+        probe_result["packets_received"] += len(rtts)
+        
+        # Calculate packet loss
+        loss_count = len([r for r in ping_results if r.get("x")])
+        if probe_result["packets_sent"] > 0:
+            probe_result["packet_loss_percentage"] = (loss_count / probe_result["packets_sent"]) * 100
+
+    def _process_traceroute_data(self, result: Dict, probe_result: Dict) -> None:
+        """Process traceroute data for a single result."""
+        hops = result.get("result", [])
+        probe_result["hops"] = hops
+        probe_result["hops_count"] = len(hops)
+
+    def _finalize_ping_stats(self, probe_result: Dict) -> None:
+        """Finalize ping statistics for a probe."""
+        rtts = probe_result["latency_stats"]["rtts"]
+        if rtts:
+            probe_result["latency_stats"]["avg"] = mean(rtts)
+            probe_result["latency_stats"]["min"] = min(rtts)
+            probe_result["latency_stats"]["max"] = max(rtts)
+        else:
+            probe_result["latency_stats"]["avg"] = None
+            probe_result["latency_stats"]["min"] = None
+            probe_result["latency_stats"]["max"] = None
+
+    def _compute_regional_analysis(self, regional_data: Dict[str, List[Dict]]) -> Dict[str, Any]:
+        """Compute comprehensive regional analysis."""
+        regional_stats: Dict[str, Any] = {}
+        
+        for country, probe_results in regional_data.items():
+            if len(probe_results) < 1:
+                continue
+            
+            # Analyze ping measurements
+            ping_probes = [p for p in probe_results if p.get("measurement_type") == "ping"]
+            traceroute_probes = [p for p in probe_results if p.get("measurement_type") == "traceroute"]
+            
+            country_stats: Dict[str, Any] = {
+                "probe_count": len(probe_results),
+                "ping_probe_count": len(ping_probes),
+                "traceroute_probe_count": len(traceroute_probes)
+            }
+            
+            # Ping analysis
+            if ping_probes:
+                latencies = []
+                packet_losses = []
+                jitters = []
+                
+                for probe in ping_probes:
+                    latency_stats = probe.get("latency_stats", {})
+                    if latency_stats.get("avg") is not None:
+                        latencies.append(float(latency_stats["avg"]))
+                        packet_losses.append(float(probe.get("packet_loss_percentage", 0)))
+                        
+                        # Calculate jitter (standard deviation of RTTs)
+                        rtts = latency_stats.get("rtts", [])
+                        if len(rtts) > 1:
+                            from statistics import stdev
+                            jitters.append(stdev([float(rtt) for rtt in rtts]))
+                            jitters.append(statistics.stdev([float(rtt) for rtt in rtts]))
+                        else:
+                            jitters.append(0.0)
+                
+                if latencies:
+                    ping_stats: Dict[str, float] = {
+                        "median_latency": float(median(latencies)),
+                        "mean_latency": float(mean(latencies)),
+                        "min_latency": float(min(latencies)),
+                        "max_latency": float(max(latencies)),
+                        "avg_packet_loss": float(mean(packet_losses)),
+                        "max_packet_loss": float(max(packet_losses)),
+                        "avg_jitter": float(mean(jitters)) if jitters else 0.0,
+                        "max_jitter": float(max(jitters)) if jitters else 0.0
+                    }
+                    country_stats["ping_stats"] = ping_stats
+            
+            # Traceroute analysis
+            if traceroute_probes:
+                hop_counts = [float(p.get("hops_count", 0)) for p in traceroute_probes if p.get("hops_count")]
+                if hop_counts:
+                    traceroute_stats: Dict[str, float] = {
+                        "avg_hops": float(mean(hop_counts)),
+                        "min_hops": float(min(hop_counts)),
+                        "max_hops": float(max(hop_counts)),
+                        "median_hops": float(median(hop_counts))
+                    }
+                    country_stats["traceroute_stats"] = traceroute_stats
+            
+            regional_stats[country] = country_stats
+            logger.info(f"Regional analysis for {country}: {country_stats.get('probe_count', 0)} probes")
+        
+        # Add summary statistics
+        total_countries = len(regional_stats)
+        total_probes = sum(int(stats.get("probe_count", 0)) for stats in regional_stats.values())
+        
+        summary: Dict[str, Any] = {
+            "total_countries": total_countries,
+            "total_probes_analyzed": total_probes,
+            "countries": list(regional_stats.keys())
+        }
+        
+        return {
+            "summary": summary,
+            "by_country": regional_stats
+        }
 
     # This method saves the measurement information to a JSON file
     # It includes the measurement ID, target, type, created_at timestamp, and configuration.
@@ -407,14 +681,18 @@ class SintraMeasurementClient:
     # This method retrieves the saved measurement IDs from the created_measurements_dir
     # It looks for files named "measurement_*_info.json" and extracts the measurement_id
     def _get_saved_measurement_ids(self):
+        """Retrieve the saved measurement IDs from the created_measurements_dir."""
         measurement_ids = []
         if self.created_measurements_dir.exists():
             for info_file in self.created_measurements_dir.glob("measurement_*_info.json"):
                 try:
                     with open(info_file, 'r') as f:
                         info = json.load(f)
-                        measurement_ids.append(info['measurement_id'])
-                except json.JSONDecodeError:
+                        measurement_id = info.get('measurement_id')
+                        if measurement_id:
+                            measurement_ids.append(int(measurement_id))
+                except (json.JSONDecodeError, KeyError, ValueError) as e:
+                    logger.warning(f"Error reading measurement info from {info_file}: {e}")
                     continue
         return measurement_ids
     
@@ -652,6 +930,271 @@ class SintraMeasurementClient:
         
         with open(results_file, 'w') as f:
             json.dump(processed_results, f, indent=2)
+
+    def fetch_and_analyze_measurements(self, measurement_ids: List[str]) -> List[Dict[str, Any]]:
+        """Fetch measurements and perform regional analysis."""
+        all_results = []
+        
+        for measurement_id in measurement_ids:
+            logger.info(f"Fetching measurement {measurement_id}")
+            success = self._fetch_single_measurement(int(measurement_id))
+            
+            if success:
+                # Load the saved results
+                results_file = self.fetched_measurements_dir / f"measurement_{measurement_id}_result.json"
+                if results_file.exists():
+                    with open(results_file, 'r') as f:
+                        measurement_result = json.load(f)
+                    
+                    # Add regional analysis
+                    measurement_result = self._add_regional_analysis(measurement_result)
+                    all_results.append(measurement_result)
+                    
+                    # Save updated result with regional analysis
+                    self._save_results(measurement_id, measurement_result)
+        
+        return all_results
+    
+    def _add_regional_analysis(self, measurement_result: Dict[str, Any]) -> Dict[str, Any]:
+        """Add regional analysis to measurement results."""
+        results = measurement_result.get("results", [])
+        if not results:
+            return measurement_result
+        
+        # Group results by country/region
+        regional_data = defaultdict(list)
+        for result in results:
+            country = result.get("probe_country")
+            if country and result.get("measurement_type") == "ping":
+                regional_data[country].append(result)
+        
+        # Calculate regional statistics
+        regional_stats: Dict[str, Any] = {}
+        for country, probe_results in regional_data.items():
+            if len(probe_results) >= 2:  # Minimum 2 probes for regional analysis
+                latencies = []
+                packet_losses = []
+                
+                for probe_result in probe_results:
+                    latency_stats = probe_result.get("latency_stats", {})
+                    avg_latency = latency_stats.get("avg")
+                    if avg_latency is not None:
+                        latencies.append(float(avg_latency))
+                        packet_loss = probe_result.get("packet_loss_percentage", 0)
+                        packet_losses.append(float(packet_loss))
+                
+                if latencies:
+                    country_analysis: Dict[str, Any] = {
+                        "probe_count": len(probe_results),
+                        "median_latency": float(median(latencies)),
+                        "mean_latency": float(mean(latencies)),
+                        "min_latency": float(min(latencies)),
+                        "max_latency": float(max(latencies)),
+                        "avg_packet_loss": float(mean(packet_losses)),
+                        "max_packet_loss": float(max(packet_losses))
+                    }
+                    regional_stats[country] = country_analysis
+        
+        # Add regional analysis to measurement result
+        measurement_result["regional_analysis"] = regional_stats
+        logger.info(f"Added regional analysis for {len(regional_stats)} regions")
+        
+        return measurement_result
+
+    def fetch_measurement_results(self, measurement_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch results for a specific measurement with enhanced probe information."""
+        try:
+            # Get measurement info first
+            measurement_url = f"{self.base_url}/measurements/{measurement_id}/"
+            measurement_response = requests.get(measurement_url)
+            measurement_response.raise_for_status()
+            measurement_info = measurement_response.json()
+            
+            # Get measurement results
+            results_url = f"{self.base_url}/measurements/{measurement_id}/results/"
+            params = {"format": "json"}
+            
+            response = requests.get(results_url, params=params)
+            response.raise_for_status()
+            
+            raw_results = response.json()
+            logger.info(f"Retrieved {len(raw_results)} raw results for measurement {measurement_id}")
+            
+            # Process results and add probe information
+            processed_results = []
+            probe_cache = {}  # Cache probe info to avoid repeated API calls
+            
+            for result in raw_results:
+                probe_id = result.get("prb_id")
+                if probe_id:
+                    # Get probe information including country
+                    if probe_id not in probe_cache:
+                        probe_info = self._get_probe_info(probe_id)
+                        probe_cache[probe_id] = probe_info
+                    
+                    probe_info = probe_cache[probe_id]
+                    processed_result = self._process_measurement_result(result, measurement_info, probe_info)
+                    if processed_result:
+                        processed_results.append(processed_result)
+            
+            logger.info(f"Processed {len(processed_results)} results with probe information")
+            
+            return {
+                "measurement_id": measurement_id,
+                "measurement_type": measurement_info.get("type"),
+                "target": measurement_info.get("target"),
+                "creation_time": measurement_info.get("creation_time"),
+                "results": processed_results,
+                "total_probes": len(processed_results)
+            }
+            
+        except requests.RequestException as e:
+            logger.error(f"Error fetching measurement results for {measurement_id}: {e}")
+            return None
+
+    def _get_probe_info(self, probe_id: int) -> Dict[str, Any]:
+        """Get probe information including country code."""
+        try:
+            probe_url = f"{self.base_url}/probes/{probe_id}/"
+            response = requests.get(probe_url)
+            response.raise_for_status()
+            probe_data = response.json()
+            
+            return {
+                "country_code": probe_data.get("country_code"),
+                "country": self._get_country_name(probe_data.get("country_code")),
+                "asn": probe_data.get("asn_v4"),
+                "prefix": probe_data.get("prefix_v4"),
+                "status": probe_data.get("status", {}).get("name"),
+                "latitude": probe_data.get("latitude"),
+                "longitude": probe_data.get("longitude")
+            }
+        except requests.RequestException as e:
+            logger.warning(f"Could not fetch probe info for probe {probe_id}: {e}")
+            return {"country_code": None, "country": "Unknown"}
+
+    def _get_country_name(self, country_code: str) -> str:
+        """Convert country code to country name with expanded mapping."""
+        if not country_code:
+            return "Unknown"
+        
+        # Expanded country code to name mapping
+        country_map = {
+            "AD": "Andorra", "AE": "United Arab Emirates", "AF": "Afghanistan", "AG": "Antigua and Barbuda",
+            "AI": "Anguilla", "AL": "Albania", "AM": "Armenia", "AO": "Angola", "AQ": "Antarctica",
+            "AR": "Argentina", "AS": "American Samoa", "AT": "Austria", "AU": "Australia", "AW": "Aruba",
+            "AX": "Åland Islands", "AZ": "Azerbaijan", "BA": "Bosnia and Herzegovina", "BB": "Barbados",
+            "BD": "Bangladesh", "BE": "Belgium", "BF": "Burkina Faso", "BG": "Bulgaria", "BH": "Bahrain",
+            "BI": "Burundi", "BJ": "Benin", "BL": "Saint Barthélemy", "BM": "Bermuda", "BN": "Brunei",
+            "BO": "Bolivia", "BQ": "Caribbean Netherlands", "BR": "Brazil", "BS": "Bahamas", "BT": "Bhutan",
+            "BV": "Bouvet Island", "BW": "Botswana", "BY": "Belarus", "BZ": "Belize", "CA": "Canada",
+            "CC": "Cocos Islands", "CD": "DR Congo", "CF": "Central African Republic", "CG": "Republic of the Congo",
+            "CH": "Switzerland", "CI": "Côte d'Ivoire", "CK": "Cook Islands", "CL": "Chile", "CM": "Cameroon",
+            "CN": "China", "CO": "Colombia", "CR": "Costa Rica", "CU": "Cuba", "CV": "Cape Verde",
+            "CW": "Curaçao", "CX": "Christmas Island", "CY": "Cyprus", "CZ": "Czech Republic", "DE": "Germany",
+            "DJ": "Djibouti", "DK": "Denmark", "DM": "Dominica", "DO": "Dominican Republic", "DZ": "Algeria",
+            "EC": "Ecuador", "EE": "Estonia", "EG": "Egypt", "EH": "Western Sahara", "ER": "Eritrea",
+            "ES": "Spain", "ET": "Ethiopia", "FI": "Finland", "FJ": "Fiji", "FK": "Falkland Islands",
+            "FM": "Micronesia", "FO": "Faroe Islands", "FR": "France", "GA": "Gabon", "GB": "United Kingdom",
+            "GD": "Grenada", "GE": "Georgia", "GF": "French Guiana", "GG": "Guernsey", "GH": "Ghana",
+            "GI": "Gibraltar", "GL": "Greenland", "GM": "Gambia", "GN": "Guinea", "GP": "Guadeloupe",
+            "GQ": "Equatorial Guinea", "GR": "Greece", "GS": "South Georgia", "GT": "Guatemala", "GU": "Guam",
+            "GW": "Guinea-Bissau", "GY": "Guyana", "HK": "Hong Kong", "HM": "Heard Island", "HN": "Honduras",
+            "HR": "Croatia", "HT": "Haiti", "HU": "Hungary", "ID": "Indonesia", "IE": "Ireland",
+            "IL": "Israel", "IM": "Isle of Man", "IN": "India", "IO": "British Indian Ocean Territory",
+            "IQ": "Iraq", "IR": "Iran", "IS": "Iceland", "IT": "Italy", "JE": "Jersey", "JM": "Jamaica",
+            "JO": "Jordan", "JP": "Japan", "KE": "Kenya", "KG": "Kyrgyzstan", "KH": "Cambodia",
+            "KI": "Kiribati", "KM": "Comoros", "KN": "Saint Kitts and Nevis", "KP": "North Korea",
+            "KR": "South Korea", "KW": "Kuwait", "KY": "Cayman Islands", "KZ": "Kazakhstan", "LA": "Laos",
+            "LB": "Lebanon", "LC": "Saint Lucia", "LI": "Liechtenstein", "LK": "Sri Lanka", "LR": "Liberia",
+            "LS": "Lesotho", "LT": "Lithuania", "LU": "Luxembourg", "LV": "Latvia", "LY": "Libya",
+            "MA": "Morocco", "MC": "Monaco", "MD": "Moldova", "ME": "Montenegro", "MF": "Saint Martin",
+            "MG": "Madagascar", "MH": "Marshall Islands", "MK": "North Macedonia", "ML": "Mali", "MM": "Myanmar",
+            "MN": "Mongolia", "MO": "Macao", "MP": "Northern Mariana Islands", "MQ": "Martinique",
+            "MR": "Mauritania", "MS": "Montserrat", "MT": "Malta", "MU": "Mauritius", "MV": "Maldives",
+            "MW": "Malawi", "MX": "Mexico", "MY": "Malaysia", "MZ": "Mozambique", "NA": "Namibia",
+            "NC": "New Caledonia", "NE": "Niger", "NF": "Norfolk Island", "NG": "Nigeria", "NI": "Nicaragua",
+            "NL": "Netherlands", "NO": "Norway", "NP": "Nepal", "NR": "Nauru", "NU": "Niue", "NZ": "New Zealand",
+            "OM": "Oman", "PA": "Panama", "PE": "Peru", "PF": "French Polynesia", "PG": "Papua New Guinea",
+            "PH": "Philippines", "PK": "Pakistan", "PL": "Poland", "PM": "Saint Pierre and Miquelon",
+            "PN": "Pitcairn Islands", "PR": "Puerto Rico", "PS": "Palestine", "PT": "Portugal", "PW": "Palau",
+            "PY": "Paraguay", "QA": "Qatar", "RE": "Réunion", "RO": "Romania", "RS": "Serbia",
+            "RU": "Russia", "RW": "Rwanda", "SA": "Saudi Arabia", "SB": "Solomon Islands", "SC": "Seychelles",
+            "SD": "Sudan", "SE": "Sweden", "SG": "Singapore", "SH": "Saint Helena", "SI": "Slovenia",
+            "SJ": "Svalbard and Jan Mayen", "SK": "Slovakia", "SL": "Sierra Leone", "SM": "San Marino",
+            "SN": "Senegal", "SO": "Somalia", "SR": "Suriname", "SS": "South Sudan", "ST": "São Tomé and Príncipe",
+            "SV": "El Salvador", "SX": "Sint Maarten", "SY": "Syria", "SZ": "Eswatini", "TC": "Turks and Caicos",
+            "TD": "Chad", "TF": "French Southern Territories", "TG": "Togo", "TH": "Thailand", "TJ": "Tajikistan",
+            "TK": "Tokelau", "TL": "East Timor", "TM": "Turkmenistan", "TN": "Tunisia", "TO": "Tonga",
+            "TR": "Turkey", "TT": "Trinidad and Tobago", "TV": "Tuvalu", "TW": "Taiwan", "TZ": "Tanzania",
+            "UA": "Ukraine", "UG": "Uganda", "UM": "US Minor Outlying Islands", "US": "United States",
+            "UY": "Uruguay", "UZ": "Uzbekistan", "VA": "Vatican City", "VC": "Saint Vincent and the Grenadines",
+            "VE": "Venezuela", "VG": "British Virgin Islands", "VI": "US Virgin Islands", "VN": "Vietnam",
+            "VU": "Vanuatu", "WF": "Wallis and Futuna", "WS": "Samoa", "YE": "Yemen", "YT": "Mayotte",
+            "ZA": "South Africa", "ZM": "Zambia", "ZW": "Zimbabwe"
+        }
+        
+        return country_map.get(country_code, country_code)
+
+    def _process_measurement_result(self, result: Dict, measurement_info: Dict, probe_info: Dict) -> Optional[Dict[str, Any]]:
+        """Process a single measurement result with probe information."""
+        try:
+            measurement_type = measurement_info.get("type")
+            processed_result = {
+                "probe_id": result.get("prb_id"),
+                "measurement_type": measurement_type,
+                "probe_country": probe_info.get("country", "Unknown"),
+                "probe_country_code": probe_info.get("country_code"),
+                "probe_asn": probe_info.get("asn"),
+                "timestamp": result.get("timestamp"),
+                "target": measurement_info.get("target")
+            }
+            
+            if measurement_type == "ping":
+                processed_result.update(self._process_ping_result(result))
+            elif measurement_type == "traceroute":
+                processed_result.update(self._process_traceroute_result(result))
+            
+            return processed_result
+            
+        except Exception as e:
+            logger.warning(f"Error processing result for probe {result.get('prb_id')}: {e}")
+            return None
+
+    def _process_ping_result(self, result: Dict) -> Dict[str, Any]:
+        """Process ping measurement result."""
+        ping_data = {}
+        
+        if "result" in result:
+            ping_results = result["result"]
+            rtts = [r.get("rtt") for r in ping_results if r.get("rtt") is not None]
+            
+            ping_data.update({
+                "latency_stats": {
+                    "rtts": rtts,
+                    "avg": sum(rtts) / len(rtts) if rtts else None,
+                    "min": min(rtts) if rtts else None,
+                    "max": max(rtts) if rtts else None
+                },
+                "packet_loss_percentage": len([r for r in ping_results if r.get("x")]) / len(ping_results) * 100 if ping_results else 0,
+                "packets_sent": len(ping_results),
+                "packets_received": len(rtts)
+            })
+        
+        return ping_data
+
+    def _process_traceroute_result(self, result: Dict) -> Dict[str, Any]:
+        """Process traceroute measurement result."""
+        traceroute_data = {}
+        
+        if "result" in result:
+            hops = result.get("result", [])
+            traceroute_data.update({
+                "hops": hops,
+                "hops_count": len(hops)
+            })
+        
+        return traceroute_data
 
 def main():
     # This is the main entry point for the Sintra Measurement Client

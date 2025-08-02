@@ -87,6 +87,9 @@ def create_parser():
             help='Show alerts for specific measurement ID only'
         )
     
+    # Plots command
+    plots_parser = subparsers.add_parser('plots', help='Generate visualization plots for all measurements')
+    
     return parser
 
 # This function handles the create measurements command
@@ -297,6 +300,109 @@ def handle_alerts_command(args):
         raise
 
 
+def handle_plots_command(args):
+    """Handle the plots command for generating visualizations."""
+    try:
+        logger.info("=== Generating Visualization Plots ===")
+        
+        # Import here to avoid requiring matplotlib if not using plots
+        try:
+            from visualization.plotter import SintraPlotter
+        except ImportError as e:
+            logger.error("Failed to import plotting dependencies. Please install matplotlib and seaborn:")
+            logger.error("pip install matplotlib seaborn")
+            return
+        
+        # Initialize plotter
+        plotter = SintraPlotter()
+        
+        # Check if results exist
+        results_dir = Path("measurement_client/results/fetched_measurements")
+        
+        if not results_dir.exists() or not list(results_dir.glob("measurement_*_result.json")):
+            logger.error("No measurement results found. Please run 'sintra fetch' first.")
+            return
+        
+        # Generate plots for all measurements
+        plotter.plot_all_measurements()
+        
+        logger.info("Plot generation complete. Check 'visualization/plots/' directory for results.")
+        
+    except Exception as e:
+        logger.error(f"Failed to generate plots: {e}")
+        raise
+
+def plot_json():
+    """Generate plots from JSON measurement files."""
+    import sys
+    from visualization.json_result_plotter import JSONResultPlotter
+    
+    if len(sys.argv) < 3:
+        print("Usage: python sintra.py plot-json <path_to_json_file>")
+        print("Example: python sintra.py plot-json measurement_12345_result.json")
+        return
+    
+    json_file_path = sys.argv[2]
+    
+    if not Path(json_file_path).exists():
+        print(f"Error: File {json_file_path} not found")
+        return
+    
+    print(f"Processing JSON file: {json_file_path}")
+    
+    plotter = JSONResultPlotter()
+    plotter.process_measurement_file(json_file_path)
+    
+    print(f"Plots saved to: {plotter.output_dir}")
+
+def plot_results():
+    """Generate plots from automatically fetched measurement results."""
+    from visualization.json_result_plotter import JSONResultPlotter
+    
+    print("Generating plots from fetched measurement results...")
+    
+    plotter = JSONResultPlotter()
+    plotter.auto_process_all_results()
+
+def plot_measurements():
+    """Generate plots from measurement results showing network performance."""
+    from visualization.measurement_plotter import MeasurementPlotter
+    
+    print("Creating measurement performance plots...")
+    plotter = MeasurementPlotter()
+    plotter.process_all_measurement_files()
+
+def plot_events():
+    """Generate plots from event manager results showing detected anomalies.""" 
+    from visualization.event_plotter import EventPlotter
+    
+    print("Creating anomaly detection plots...")
+    plotter = EventPlotter()
+    plotter.process_all_event_files()
+
+def plot():
+    """Generate both measurement performance and anomaly detection plots."""
+    from visualization.measurement_plotter import MeasurementPlotter
+    from visualization.event_plotter import EventPlotter
+    from visualization.traceroute_plotter import TraceroutePlotter
+    
+    logger.info("Creating comprehensive network analysis plots...")
+    
+    logger.info("1/3 Creating measurement performance plots...")
+    measurement_plotter = MeasurementPlotter()
+    measurement_plotter.process_all_measurement_files()
+    
+    logger.info("2/3 Creating traceroute timeline analysis...")
+    traceroute_plotter = TraceroutePlotter()
+    traceroute_plotter.process_all_traceroute_files()
+    
+    logger.info("3/3 Checking for anomalies and creating detection plots...")
+    event_plotter = EventPlotter()
+    event_plotter.process_all_event_files()
+    
+    logger.info("Plot generation completed!")
+    logger.info("Check 'visualization/plots/' directory for results")
+
 # Main entry point for the Sintra
 def main():
     parser = create_parser()
@@ -323,7 +429,12 @@ def main():
 
         elif args.command == 'alerts' or args.command == 'alert':
             handle_alerts_command(args)
+        
+        elif args.command == 'plots':
+            handle_plots_command(args)
             
+        elif len(sys.argv) > 1 and sys.argv[1] == "plot":
+            plot()
         else:
             parser.print_help()
             sys.exit(1)
@@ -342,3 +453,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
