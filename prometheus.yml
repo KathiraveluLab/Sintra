@@ -1,0 +1,31 @@
+global:
+  scrape_interval: 30s
+  evaluation_interval: 30s
+
+rule_files:
+  # - "first_rules.yml"
+  # - "second_rules.yml"
+
+scrape_configs:
+  # Sintra measurement exporter
+  - job_name: 'sintra-measurements'
+    static_configs:
+      - targets: ['localhost:8000']
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    metrics_path: /metrics
+
+  # Prometheus self-monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          # - alertmanager:9093
+
+# Optional: Recording rules for aggregations
+# rule_files:
+#   - "sintra_rules.yml"
