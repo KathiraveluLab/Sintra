@@ -615,7 +615,6 @@ class SintraMeasurementClient:
                         if len(rtts) > 1:
                             from statistics import stdev
                             jitters.append(stdev([float(rtt) for rtt in rtts]))
-                            jitters.append(statistics.stdev([float(rtt) for rtt in rtts]))
                         else:
                             jitters.append(0.0)
                 
