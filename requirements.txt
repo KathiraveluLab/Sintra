@@ -1,5 +1,5 @@
 ripe.atlas.cousteau>=2.2.0
 PyYAML>=6.0.3
 python-dotenv>=1.2.2
-matplotlib>=3.5.1
+matplotlib>=3.10.9
 seaborn>=0.13.2
