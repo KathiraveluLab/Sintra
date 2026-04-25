@@ -1,4 +1,4 @@
-ripe.atlas.cousteau>=1.4.0
+ripe.atlas.cousteau>=2.2.0
 PyYAML>=6.0.3
 python-dotenv>=1.2.2
 matplotlib>=3.5.1
