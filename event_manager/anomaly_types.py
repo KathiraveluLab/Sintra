@@ -43,5 +43,10 @@ ANOMALY_TYPES = {
         "description": "Only some probes report high loss (not the majority)",
         "measurement_type": "ping",
         "latency_related": False
+    },
+    "correlated_routing_event": {
+        "description": "Latency spike correlated with a route change on the same probe (probable routing cause)",
+        "measurement_type": "ping, traceroute",
+        "latency_related": True
     }
 }

@@ -3,3 +3,4 @@ PyYAML>=6.0.3
 python-dotenv>=1.2.2
 matplotlib>=3.10.9
 seaborn>=0.13.2
+pytest>=7.0.0

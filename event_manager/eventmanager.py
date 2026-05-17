@@ -1,8 +1,9 @@
 import os
 import json
+import requests
 from pathlib import Path
-from datetime import datetime
-from typing import Dict, List, Any, Optional
+from datetime import datetime, timezone
+from typing import Dict, List, Any, Optional, Tuple
 from measurement_client.logger import logger
 from .anomaly_types import ANOMALY_TYPES
 from .anomaly_utils import calculate_jitter, is_outlier, geo_anomaly_check
@@ -139,6 +140,9 @@ class SintraEventManager:
         events.extend(self._detect_threshold_anomalies(probe_data, timestamp))
         events.extend(self._detect_routing_anomalies(probe_data, timestamp))
         
+        # Cross-correlate ping and traceroute anomalies
+        events.extend(self._correlate_events(events, timestamp))
+        
         logger.debug(f"Detected {len(events)} total anomalies for measurement {data.get('measurement_id')}")
         return events
 
@@ -158,6 +162,9 @@ class SintraEventManager:
             probe_id = result.get("probe_id")
             if not probe_id:
                 continue
+            # Normalize probe_id to string to prevent silent key mismatches
+            # (RIPE Atlas may return probe IDs as int or str)
+            probe_id = str(probe_id)
                 
             target_addr = result.get("target_address") or result.get("target")
             probe_data['targets'][probe_id] = target_addr
@@ -199,18 +206,41 @@ class SintraEventManager:
 
     def _get_and_update_baseline_rtt(self, probe_id: str, target_addr: str, 
                                     current_rtt: Optional[float]) -> Optional[float]:
+        """Get baseline RTT using a rolling average of the last N measurements.
+        
+        Stores the last 10 RTT values per probe-target pair and uses their
+        average as the baseline. This smooths out temporary spikes and dips,
+        giving a more stable and realistic picture of normal latency.
+        """
         baseline_file = self.baseline_dir / f"ping_{probe_id}_{target_addr}.json"
         baseline_rtt = None
+        rolling_window_size = 10
         
         try:
+            rtts = []
             if baseline_file.exists():
                 with open(baseline_file, "r") as bf:
                     baseline_data = json.load(bf)
-                    baseline_rtt = baseline_data.get("avg_rtt")
+                    rtts = baseline_data.get("rtts", [])
+                    # Fallback: migrate from old single-value format
+                    if not rtts and baseline_data.get("avg_rtt") is not None:
+                        rtts = [baseline_data["avg_rtt"]]
+                    
+                    # Compute baseline as average of stored values
+                    if rtts:
+                        baseline_rtt = sum(rtts) / len(rtts)
             
             if current_rtt is not None:
+                rtts.append(current_rtt)
+                # Keep only the last N values
+                if len(rtts) > rolling_window_size:
+                    rtts = rtts[-rolling_window_size:]
+                
                 with open(baseline_file, "w") as bf:
-                    json.dump({"avg_rtt": current_rtt}, bf)
+                    json.dump({
+                        "rtts": rtts,
+                        "avg_rtt": sum(rtts) / len(rtts)
+                    }, bf)
                     
         except (json.JSONDecodeError, IOError) as e:
             logger.warning(f"Failed to handle baseline RTT for {probe_id}->{target_addr}: {e}")
@@ -268,18 +298,25 @@ class SintraEventManager:
                                    timestamp: str) -> List[Dict[str, Any]]:
         events = []
         thresholds = self.config["thresholds"]
+        target_thresholds = self.config.get("target_thresholds", {})
         
         for probe_id in probe_data['targets']:
             target_addr = probe_data['targets'][probe_id]
             
+            # Use per-target threshold if configured, otherwise fall back to global
+            target_config = target_thresholds.get(target_addr, {})
+            latency_threshold = target_config.get(
+                "latency_spike_ms", thresholds["latency_spike_ms"]
+            )
+            
             # Latency spike detection
             latency = probe_data['latencies'].get(probe_id)
             if latency:
-                # Static threshold
-                if latency > thresholds["latency_spike_ms"]:
+                # Static threshold (per-target or global)
+                if latency > latency_threshold:
                     events.append(self._create_event(
                         timestamp, "latency_spike", probe_id, target_addr,
-                        "ping_rtt_ms", latency, thresholds["latency_spike_ms"],
+                        "ping_rtt_ms", latency, latency_threshold,
                         "ms", "warning"
                     ))
                 
@@ -362,6 +399,48 @@ class SintraEventManager:
         
         return events
 
+    def _correlate_events(self, events: List[Dict[str, Any]], 
+                         timestamp: str) -> List[Dict[str, Any]]:
+        """Cross-correlate ping and traceroute anomalies from the same probe.
+        
+        If a latency spike is detected at the same time as a route change from
+        the same probe to the same target, adds a 'correlated_routing_event'
+        alongside the existing events to flag the probable root cause.
+        The original latency_spike and route_change events are kept as-is.
+        """
+        correlated = []
+        
+        # Group events by (probe_id, target) using tuple keys to avoid
+        # string concatenation collisions
+        groups: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        for event in events:
+            key = (str(event.get('probe_id', '')), str(event.get('target', '')))
+            if key not in groups:
+                groups[key] = {"anomalies": [], "event_refs": [], 
+                              "probe_id": key[0], "target": key[1]}
+            groups[key]["anomalies"].append(event.get("anomaly"))
+            groups[key]["event_refs"].append(event)
+        
+        # Check for latency_spike + route_change in the same group
+        for key, group in groups.items():
+            anomaly_types = set(group["anomalies"])
+            if "latency_spike" in anomaly_types and "route_change" in anomaly_types:
+                probe_id = group["probe_id"]
+                target = group["target"]
+                
+                correlated_event = self._create_event(
+                    timestamp, "correlated_routing_event", probe_id, target,
+                    "correlation", None, None, "", "warning"
+                )
+                correlated_event["description"] = (
+                    "Latency spike likely caused by route change detected on the same probe"
+                )
+                correlated_event["correlated_anomalies"] = ["latency_spike", "route_change"]
+                correlated.append(correlated_event)
+                logger.debug(f"Correlated latency_spike + route_change for probe {probe_id} -> {target}")
+        
+        return correlated
+
     def _create_event(self, timestamp: str, anomaly: str, probe_id: str,
                      target: str, metric: str, value: Any, threshold: Any,
                      units: str, severity: str) -> Dict[str, Any]:
@@ -395,6 +474,10 @@ class SintraEventManager:
                 json.dump(output_data, f, indent=2)
                 
             logger.debug(f"Events saved to {out_file}")
+            
+            # Send webhook alerts if configured
+            if events:
+                self.send_webhook_alert(measurement_id, events)
             
         except IOError as e:
             logger.error(f"Failed to save events for measurement {measurement_id}: {e}")
@@ -467,4 +550,76 @@ class SintraEventManager:
         Send events to POX controller (to be implemented).
         """
         logger.info(f"Sending events for measurement {measurement_id} to POX controller (placeholder)")
+
+    def send_webhook_alert(self, measurement_id: str, events: List[Dict[str, Any]]) -> None:
+        """Send alert notifications to a configured webhook URL.
+        
+        Sends a POST request with JSON payload containing measurement ID,
+        anomaly types, severity, and affected probes. Compatible with
+        Slack, Microsoft Teams, Discord, PagerDuty, or any custom endpoint.
+        
+        Note: This runs synchronously. For high-throughput batch analysis,
+        consider running detection and alerting in separate steps.
+        """
+        webhook_config = self.config.get("webhook", {})
+        
+        if not webhook_config.get("enabled", False):
+            logger.debug("Webhook alerts are disabled")
+            return
+        
+        webhook_url = webhook_config.get("url", "")
+        if not webhook_url:
+            logger.warning("Webhook URL is not configured")
+            return
+        
+        # Validate URL scheme to prevent SSRF
+        if not webhook_url.startswith(("https://", "http://")):
+            logger.error(f"Invalid webhook URL scheme: {webhook_url}. Must start with https:// or http://")
+            return
+        
+        timeout = webhook_config.get("timeout_seconds", 10)
+        
+        # Filter for critical/warning events worth alerting on
+        alert_events = [e for e in events if e.get("severity") in ("critical", "warning")]
+        if not alert_events:
+            logger.debug(f"No alertable events for measurement {measurement_id}")
+            return
+        
+        # Build payload
+        payload = {
+            "measurement_id": measurement_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "total_anomalies": len(alert_events),
+            "anomalies": []
+        }
+        
+        for event in alert_events:
+            payload["anomalies"].append({
+                "type": event.get("anomaly"),
+                "probe_id": event.get("probe_id"),
+                "target": event.get("target"),
+                "severity": event.get("severity"),
+                "value": event.get("value"),
+                "threshold": event.get("threshold"),
+                "units": event.get("units", "")
+            })
+        
+        try:
+            response = requests.post(
+                webhook_url,
+                json=payload,
+                timeout=timeout,
+                headers={"Content-Type": "application/json"}
+            )
+            
+            if response.status_code < 300:
+                logger.info(f"Webhook alert sent for measurement {measurement_id}: {len(alert_events)} anomalies")
+            else:
+                logger.warning(
+                    f"Webhook returned status {response.status_code} for measurement {measurement_id}: "
+                    f"{response.text[:200]}"
+                )
+                
+        except Exception as e:
+            logger.error(f"Failed to send webhook alert for measurement {measurement_id}: {e}")
 
