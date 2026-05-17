@@ -2,7 +2,9 @@ import argparse
 import sys
 import json
 import logging
+import re
 from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from measurement_client.client import SintraMeasurementClient
 from measurement_client.logger import logger
 from event_manager.eventmanager import SintraEventManager
@@ -64,6 +66,11 @@ def create_parser():
         action='store_true',
         help='Fetch all saved measurements (ignores config file measurement_ids)'
     )
+    fetch_parser.add_argument(
+        '--since',
+        type=str,
+        help='Fetch results from the last N time units (e.g., 24h, 7d, 30m)'
+    )
     
     # Event management commands
     detect_parser = subparsers.add_parser('detect', help='Detect anomalies in measurement results')
@@ -89,6 +96,9 @@ def create_parser():
     
     # Plots command
     plots_parser = subparsers.add_parser('plots', help='Generate visualization plots for all measurements')
+    
+    # Status command
+    status_parser = subparsers.add_parser('status', help='Show current status of Sintra measurements and alerts')
     
     return parser
 
@@ -119,6 +129,32 @@ def handle_create_command(args):
         logger.error(f"Failed to create measurements: {e}")
         raise
 
+def parse_since_duration(since_str: str) -> int:
+    """Parse a duration string like '24h', '7d', '30m' into a Unix timestamp.
+    
+    Returns the Unix timestamp for (now - duration).
+    """
+    match = re.match(r'^(\d+)([mhdw])$', since_str.strip().lower())
+    if not match:
+        raise ValueError(
+            f"Invalid --since format: '{since_str}'. "
+            "Use format like '30m', '24h', '7d', or '2w'"
+        )
+    
+    value = int(match.group(1))
+    unit = match.group(2)
+    
+    unit_map = {
+        'm': timedelta(minutes=value),
+        'h': timedelta(hours=value),
+        'd': timedelta(days=value),
+        'w': timedelta(weeks=value)
+    }
+    
+    start_time = datetime.now(timezone.utc) - unit_map[unit]
+    return int(start_time.timestamp())
+
+
 # This function handles the fetch measurements command
 # It fetches measurement results based on the provided configuration or specific measurement ID
 def handle_fetch_command(args):
@@ -126,6 +162,16 @@ def handle_fetch_command(args):
         logger.info("=== Fetching Measurement Results ===")
         
         client = SintraMeasurementClient(config_path=args.config)
+        
+        # Parse --since flag and set on client
+        if args.since:
+            try:
+                since_timestamp = parse_since_duration(args.since)
+                client.since_timestamp = since_timestamp
+                logger.info(f"Filtering results since: {datetime.fromtimestamp(since_timestamp, timezone.utc).isoformat()}")
+            except ValueError as e:
+                logger.error(str(e))
+                return
         
         if args.all:
             # Fetch all saved measurements, ignore config
@@ -403,6 +449,80 @@ def plot():
     logger.info("Plot generation completed!")
     logger.info("Check 'visualization/plots/' directory for results")
 
+def handle_status_command(args):
+    """Handle the status command to show a quick overview of Sintra's state."""
+    try:
+        logger.info("=== Sintra Status ===")
+        
+        # Check fetched measurements
+        fetched_dir = Path("measurement_client/results/fetched_measurements")
+        created_dir = Path("measurement_client/results/created_measurements")
+        events_dir = Path("event_manager/results")
+        
+        # Created measurements
+        created_count = 0
+        if created_dir.exists():
+            created_count = len(list(created_dir.glob("measurement_*_info.json")))
+        logger.info(f"Created measurements: {created_count}")
+        
+        # Fetched measurements
+        fetched_count = 0
+        last_fetch_time = None
+        if fetched_dir.exists():
+            fetched_files = list(fetched_dir.glob("measurement_*_result.json"))
+            fetched_count = len(fetched_files)
+            if fetched_files:
+                # Get most recent fetch time from file modification time
+                latest_file = max(fetched_files, key=lambda f: f.stat().st_mtime)
+                last_fetch_time = datetime.fromtimestamp(latest_file.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+        
+        logger.info(f"Fetched measurements: {fetched_count}")
+        if last_fetch_time:
+            logger.info(f"Last fetch: {last_fetch_time}")
+        else:
+            logger.info("Last fetch: Never")
+        
+        # Anomaly detection status
+        event_count = 0
+        total_anomalies = 0
+        critical_alerts = 0
+        if events_dir.exists():
+            event_files = list(events_dir.glob("*.json"))
+            event_count = len(event_files)
+            
+            for event_file in event_files:
+                try:
+                    with open(event_file, "r") as f:
+                        data = json.load(f)
+                    events = data.get("events", [])
+                    total_anomalies += len(events)
+                    critical_alerts += sum(1 for e in events if e.get("severity") == "critical")
+                except (json.JSONDecodeError, IOError):
+                    pass
+        
+        if event_count > 0:
+            logger.info(f"Anomaly detection: Run ({event_count} file(s) analyzed)")
+        else:
+            logger.info("Anomaly detection: Not run yet")
+        
+        logger.info(f"Total anomalies: {total_anomalies}")
+        logger.info(f"Critical alerts: {critical_alerts}")
+        
+        # Overall health
+        if critical_alerts > 0:
+            logger.warning(f"⚠ Network health: {critical_alerts} critical issue(s) detected")
+        elif total_anomalies > 0:
+            logger.info(f"Network health: {total_anomalies} anomaly(ies) detected, no critical issues")
+        elif event_count > 0:
+            logger.info("Network health: All clear ✓")
+        else:
+            logger.info("Network health: Unknown (run 'sintra detect' first)")
+            
+    except Exception as e:
+        logger.error(f"Failed to show status: {e}")
+        raise
+
+
 # Main entry point for the Sintra
 def main():
     parser = create_parser()
@@ -432,6 +552,9 @@ def main():
         
         elif args.command == 'plots':
             handle_plots_command(args)
+        
+        elif args.command == 'status':
+            handle_status_command(args)
             
         elif len(sys.argv) > 1 and sys.argv[1] == "plot":
             plot()
