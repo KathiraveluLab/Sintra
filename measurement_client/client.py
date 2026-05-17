@@ -2,7 +2,7 @@ import os
 import json
 import yaml
 import argparse
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from dotenv import load_dotenv
@@ -17,6 +17,7 @@ from measurement_client.processors import (
 )
 from collections import defaultdict
 from statistics import mean, median
+import time
 import requests
 
 class SintraMeasurementClient:
@@ -48,6 +49,7 @@ class SintraMeasurementClient:
             
             self.create_config = None
             self.fetch_config = None
+            self.since_timestamp = None
             
             logger.info("SintraMeasurementClient initialized successfully")
             
@@ -142,10 +144,12 @@ class SintraMeasurementClient:
             if not isinstance(measurement_id, int):
                 raise ValueError(f"Invalid measurement_id: {measurement_id}. Must be an integer")
 
-    # This method creates measurements based on the loaded configuration.
-    # It processes each measurement configuration, creates the measurement,
-    logger.info("Creating measurements...")
     def create_measurements(self):
+        """Create measurements based on the loaded configuration.
+        
+        Processes each measurement configuration, creates the measurement,
+        and saves the results.
+        """
         logger.info("Creating measurements...")
         
         try:
@@ -197,7 +201,7 @@ class SintraMeasurementClient:
                 return False
             
             # Set timing parameters
-            start_time = datetime.utcnow() + timedelta(minutes=1)
+            start_time = datetime.now(timezone.utc) + timedelta(minutes=1)
             duration_hours = measurement_config.get('duration_hours', 1)
             stop_time = start_time + timedelta(hours=duration_hours)
 
@@ -379,6 +383,17 @@ class SintraMeasurementClient:
                 if 'probe_ids' in fetch_settings:
                     kwargs['probe_ids'] = fetch_settings['probe_ids']
             
+            # Apply --since time filter (overrides config time window)
+            if self.since_timestamp:
+                kwargs['start'] = self.since_timestamp
+                # --since should be the sole time constraint; remove any configured stop filter
+                if 'stop' in kwargs:
+                    logger.debug(
+                        f"Removing stop filter because --since was provided: stop={kwargs['stop']}, start={kwargs['start']}"
+                    )
+                    del kwargs['stop']
+                logger.debug(f"Applying --since filter: start={self.since_timestamp}")
+            
             # Execute the fetch request
             is_success, results = AtlasResultsRequest(**kwargs).create()
             
@@ -402,12 +417,61 @@ class SintraMeasurementClient:
             logger.error(f"Exception fetching measurement {measurement_id}: {e}")
             return False
 
+    def _request_with_backoff(self, url: str, max_retries: int = 3, 
+                              base_delay: float = 2.0) -> requests.Response:
+        """Make an HTTP GET request with exponential backoff on transient failures.
+        
+        Retries on HTTP 429 (rate limited) and 5xx (server error) responses with
+        exponential backoff. Honors the Retry-After header when present on 429
+        responses.
+        
+        Returns a successful Response on 2xx/3xx. Always raises
+        requests.RequestException on final failure (never returns None).
+        """
+        for attempt in range(max_retries + 1):
+            try:
+                response = requests.get(url, timeout=30)
+                
+                # Retry on rate limiting (429) or server errors (5xx)
+                if response.status_code == 429 or response.status_code >= 500:
+                    if attempt < max_retries:
+                        # Honor Retry-After header if present (common on RIPE Atlas 429s).
+                        # Note: RFC 7231 also allows HTTP-date format; we only handle
+                        # integer seconds here and fall back to exponential delay otherwise.
+                        retry_after = response.headers.get("Retry-After")
+                        if retry_after and retry_after.isdigit():
+                            delay = min(int(retry_after), 60)  # Cap at 60s
+                        else:
+                            delay = base_delay * (2 ** attempt)
+                        logger.warning(
+                            f"HTTP {response.status_code} from API. "
+                            f"Retrying in {delay}s (attempt {attempt + 1}/{max_retries})"
+                        )
+                        time.sleep(delay)
+                        continue
+                    # Final retry exhausted
+                    logger.error(f"HTTP {response.status_code} after {max_retries} retries: {url}")
+                
+                # Raises for any 4xx/5xx (including final retry)
+                response.raise_for_status()
+                return response
+                
+            except requests.RequestException as e:
+                if attempt < max_retries:
+                    delay = base_delay * (2 ** attempt)
+                    logger.warning(f"Request failed: {e}. Retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(delay)
+                    continue
+                raise
+        
+        # All paths above either return or raise; this is unreachable
+        assert False, f"Unreachable: request loop for {url} exited without return or raise"
+
     def _get_measurement_info(self, measurement_id: int) -> Optional[Dict[str, Any]]:
         """Get measurement information from RIPE Atlas API."""
         try:
             measurement_url = f"{self.base_url}/measurements/{measurement_id}/"
-            response = requests.get(measurement_url)
-            response.raise_for_status()
+            response = self._request_with_backoff(measurement_url)
             return response.json()
         except requests.RequestException as e:
             logger.error(f"Error getting measurement info for {measurement_id}: {e}")
@@ -420,7 +484,7 @@ class SintraMeasurementClient:
             "measurement_type": measurement_info.get("type"),
             "target": measurement_info.get("target"),
             "description": measurement_info.get("description"),
-            "fetched_at": datetime.utcnow().isoformat(),
+            "fetched_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "results_count": len(results),
             "summary": {
                 "total_probes": len(set(result.get("prb_id") for result in results)),
@@ -520,8 +584,7 @@ class SintraMeasurementClient:
                 probe_ids_str = ','.join(map(str, batch))
                 probe_url = f"{self.base_url}/probes/?id__in={probe_ids_str}"
                 
-                response = requests.get(probe_url)
-                response.raise_for_status()
+                response = self._request_with_backoff(probe_url)
                 probe_data = response.json()
                 
                 # Process batch results
@@ -668,7 +731,7 @@ class SintraMeasurementClient:
             "measurement_id": measurement_id,
             "target": target,
             "type": config.get('type', 'ping'),
-            "created_at": datetime.utcnow().isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "config": config
         }
         
@@ -694,130 +757,7 @@ class SintraMeasurementClient:
                     logger.warning(f"Error reading measurement info from {info_file}: {e}")
                     continue
         return measurement_ids
-    
-    # This method processes the results fetched from the RIPE Atlas API
-    # It takes the results and measurement_id as input and returns a processed dictionary
-    def _process_results(self, results, measurement_id):
-        processed = {
-            "measurement_id": measurement_id,
-            "fetched_at": datetime.utcnow().isoformat(),
-            "results_count": len(results),
-            "results": []
-        }
-        
-        for result in results:
-            processed_result = {
-                "probe_id": result.get("prb_id"),
-                "timestamp": result.get("timestamp"),
-                "from": result.get("from"),
-                "target": result.get("dst_name"),
-            }
-            
-            if "result" in result:
-                ping_results = result["result"]
-                rtts = [r.get("rtt") for r in ping_results if r.get("rtt")]
-                processed_result.update({
-                    "packet_loss": len([r for r in ping_results if r.get("x")]) / len(ping_results) * 100,
-                    "avg_latency": sum(rtts) / len(rtts) if rtts else None,
-                    "min_latency": min(rtts) if rtts else None,
-                    "max_latency": max(rtts) if rtts else None,
-                    "packets_sent": len(ping_results),
-                    "packets_received": len(rtts)
-                })
-            
-            if "result" in result and any("hop" in str(result).lower() for r in result.get("result", [])):
-                processed_result["traceroute_hops"] = result.get("result", [])
-            
-            processed["results"].append(processed_result)
-        
-        return processed
-    
-    # This method processes all results fetched from the RIPE Atlas API
-    # It takes the results and measurement_id as input and returns a processed dictionary
-    def _process_all_results(self, results, measurement_id):
-        processed = {
-            "measurement_id": measurement_id,
-            "fetched_at": datetime.utcnow().isoformat(),
-            "results_count": len(results),
-            "summary": {
-                "total_probes": len(set(result.get("prb_id") for result in results)),
-                "total_results": len(results),
-                "time_range": {
-                    "start": min(result.get("timestamp", 0) for result in results) if results else None,
-                    "end": max(result.get("timestamp", 0) for result in results) if results else None
-                }
-            },
-            "results": []
-        }
 
-        probe_results = {}
-        for result in results:
-            probe_id = result.get("prb_id")
-            measurement_type = result.get("type")
-            if probe_id not in probe_results:
-                probe_results[probe_id] = {
-                    "measurement_type": measurement_type,
-                    "measurement_id": measurement_id,
-                    "probe_id": probe_id,
-                    "source_address": result.get("from"),
-                    "target_address": result.get("dst_addr"),
-                    "target_name": result.get("dst_name"),
-                    "timestamp": datetime.utcfromtimestamp(result.get("timestamp", 0)).isoformat() if result.get("timestamp") else None,
-                    "firmware_version": result.get("fw"),
-                    "probe_asn": result.get("from_asn"),
-                    "probe_country": result.get("country_code"),
-                    "protocol": result.get("proto", "ICMP"),
-                    "address_family": result.get("af", 4)
-                }
-                # Initialize aggregation fields
-                if measurement_type == "ping":
-                    probe_results[probe_id].update({
-                        "latency_stats": {"rtts": [], "avg": None, "min": None, "max": None},
-                        "packet_loss_percentage": None,
-                        "packets_sent": 0,
-                        "packets_received": 0
-                    })
-                elif measurement_type == "traceroute":
-                    probe_results[probe_id].update({
-                        "hops": [],
-                        "hops_count": 0
-                    })
-
-            # Aggregate ping results
-            if measurement_type == "ping" and "result" in result:
-                ping_results = result["result"]
-                rtts = [r.get("rtt") for r in ping_results if r.get("rtt") is not None]
-                probe_results[probe_id]["latency_stats"]["rtts"].extend(rtts)
-                probe_results[probe_id]["packets_sent"] += len(ping_results)
-                probe_results[probe_id]["packets_received"] += len(rtts)
-                loss_count = len([r for r in ping_results if r.get("x")])
-                # Calculate packet loss percentage for this batch
-                if probe_results[probe_id]["packets_sent"] > 0:
-                    probe_results[probe_id]["packet_loss_percentage"] = (
-                        loss_count / probe_results[probe_id]["packets_sent"] * 100
-                    )
-            # Aggregate traceroute results
-            elif measurement_type == "traceroute" and "result" in result:
-                hops = result.get("result", [])
-                probe_results[probe_id]["hops"] = hops
-                probe_results[probe_id]["hops_count"] = len(hops)
-
-        # Finalize latency stats for ping
-        for probe_id, res in probe_results.items():
-            if res.get("measurement_type") == "ping":
-                rtts = res["latency_stats"]["rtts"]
-                if rtts:
-                    res["latency_stats"]["avg"] = sum(rtts) / len(rtts)
-                    res["latency_stats"]["min"] = min(rtts)
-                    res["latency_stats"]["max"] = max(rtts)
-                else:
-                    res["latency_stats"]["avg"] = None
-                    res["latency_stats"]["min"] = None
-                    res["latency_stats"]["max"] = None
-
-        processed["results"] = list(probe_results.values())
-        return processed
-    
     # This method analyzes the traceroute path and returns a summary of the hops
     # It takes the hops as input and returns a dictionary with hop details.
     def _analyze_traceroute_path(self, hops):
@@ -1055,8 +995,7 @@ class SintraMeasurementClient:
         """Get probe information including country code."""
         try:
             probe_url = f"{self.base_url}/probes/{probe_id}/"
-            response = requests.get(probe_url)
-            response.raise_for_status()
+            response = self._request_with_backoff(probe_url)
             probe_data = response.json()
             
             return {
@@ -1136,7 +1075,11 @@ class SintraMeasurementClient:
         return country_map.get(country_code, country_code)
 
     def _process_measurement_result(self, result: Dict, measurement_info: Dict, probe_info: Dict) -> Optional[Dict[str, Any]]:
-        """Process a single measurement result with probe information."""
+        """Process a single measurement result with probe information.
+        
+        Uses the canonical _process_ping_data and _process_traceroute_data methods
+        to avoid duplicate processing logic.
+        """
         try:
             measurement_type = measurement_info.get("type")
             processed_result = {
@@ -1149,51 +1092,32 @@ class SintraMeasurementClient:
                 "target": measurement_info.get("target")
             }
             
-            if measurement_type == "ping":
-                processed_result.update(self._process_ping_result(result))
-            elif measurement_type == "traceroute":
-                processed_result.update(self._process_traceroute_result(result))
+            if measurement_type == "ping" and "result" in result:
+                ping_results = result["result"]
+                rtts = [r.get("rtt") for r in ping_results if r.get("rtt") is not None]
+                processed_result.update({
+                    "latency_stats": {
+                        "rtts": rtts,
+                        "avg": sum(rtts) / len(rtts) if rtts else None,
+                        "min": min(rtts) if rtts else None,
+                        "max": max(rtts) if rtts else None
+                    },
+                    "packet_loss_percentage": len([r for r in ping_results if r.get("x")]) / len(ping_results) * 100 if ping_results else 0,
+                    "packets_sent": len(ping_results),
+                    "packets_received": len(rtts)
+                })
+            elif measurement_type == "traceroute" and "result" in result:
+                hops = result.get("result", [])
+                processed_result.update({
+                    "hops": hops,
+                    "hops_count": len(hops)
+                })
             
             return processed_result
             
         except Exception as e:
             logger.warning(f"Error processing result for probe {result.get('prb_id')}: {e}")
             return None
-
-    def _process_ping_result(self, result: Dict) -> Dict[str, Any]:
-        """Process ping measurement result."""
-        ping_data = {}
-        
-        if "result" in result:
-            ping_results = result["result"]
-            rtts = [r.get("rtt") for r in ping_results if r.get("rtt") is not None]
-            
-            ping_data.update({
-                "latency_stats": {
-                    "rtts": rtts,
-                    "avg": sum(rtts) / len(rtts) if rtts else None,
-                    "min": min(rtts) if rtts else None,
-                    "max": max(rtts) if rtts else None
-                },
-                "packet_loss_percentage": len([r for r in ping_results if r.get("x")]) / len(ping_results) * 100 if ping_results else 0,
-                "packets_sent": len(ping_results),
-                "packets_received": len(rtts)
-            })
-        
-        return ping_data
-
-    def _process_traceroute_result(self, result: Dict) -> Dict[str, Any]:
-        """Process traceroute measurement result."""
-        traceroute_data = {}
-        
-        if "result" in result:
-            hops = result.get("result", [])
-            traceroute_data.update({
-                "hops": hops,
-                "hops_count": len(hops)
-            })
-        
-        return traceroute_data
 
 def main():
     # This is the main entry point for the Sintra Measurement Client
