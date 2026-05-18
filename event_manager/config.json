@@ -8,11 +8,17 @@
     "geo_anomaly_margin_ms": 50.0,
     "path_flapping_window": 3
   },
+  "target_thresholds": {},
   "detection": {
     "enable_outlier_detection": true,
     "enable_geo_anomaly_detection": true,
     "enable_adaptive_baseline": true
   },
   "level": "INFO",
-  "include_debug_info": false
+  "include_debug_info": false,
+  "webhook": {
+    "enabled": false,
+    "url": "",
+    "timeout_seconds": 10
+  }
 }
