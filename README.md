@@ -78,15 +78,3 @@ python sintra.py fetch
 ```
 
 5. **Monitor results**: Check the `measurement_client/results/fetched_measurements` directory for output files.
-
-## Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-## License
-
-This project is licensed under the terms specified in the [LICENSE](LICENSE) file.
-
-## Support
-
-For questions, issues, or feature requests, please create an issue in the project repository.
