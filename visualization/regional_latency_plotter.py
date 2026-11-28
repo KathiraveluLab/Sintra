@@ -95,7 +95,8 @@ class RegionalLatencyPlotter:
                     plt.annotate(f'{lat:.1f}ms\n({probe_count} {probe_label})', (i, lat), textcoords="offset points", 
                                xytext=(0, 14), ha='center', fontsize=11, fontweight='bold')
                 
-                plt.legend(fontsize=13, loc='upper left')
+                plt.legend(fontsize=13, loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=2, frameon=True)
+                plt.title(f'Regional Latency Trend ({len(regions)} regions)', fontsize=18, fontweight='bold', pad=38)
                 logger.info(f"Successfully created regional latency trend plot with {len(regions)} regions")
             else:
                 plt.text(0.5, 0.5, 'No valid regions with latency data', 

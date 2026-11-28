@@ -303,44 +303,72 @@ def plot_experiment_results(all_records: List[Dict[str, Any]], output_dir: Path,
     """Generate publication-grade comparison figures from collected trial records."""
     os.environ["MPLBACKEND"] = "Agg"
     import matplotlib.pyplot as plt
+    from statistics import stdev
 
     output_dir.mkdir(parents=True, exist_ok=True)
     generated: List[Path] = []
     tag = "Mininet + POX" if mode == "mininet" else "Simulated Control-Loop Smoke Test"
     policy_styles = {
-        "static": ("#d62728", "--", "Static Shortest-Path (BGP-like)"),
-        "threshold": ("#ff7f0e", "-.", "Threshold-Only (>250ms / Outage)"),
-        "sintra": ("#1f77b4", "-", "Sintra Closed-Loop Adaptive"),
+        "static": ("#d62728", "--", "s", 6.5, 3, "Static Shortest-Path (BGP-like)"),
+        "threshold": ("#ff7f0e", "-.", "^", 7.5, 4, "Threshold-Only (>250ms / Outage)"),
+        "sintra": ("#1f77b4", "-", "o", 5.5, 5, "Sintra Closed-Loop Adaptive"),
     }
 
     scenarios_present = sorted({r["scenario"] for r in all_records})
     for scen in scenarios_present:
-        fig, ax = plt.subplots(figsize=(9.5, 5.4))
+        fig, ax = plt.subplots(figsize=(9.8, 6.0))
         scen_rows = [r for r in all_records if r["scenario"] == scen]
-        impaired_steps = sorted({r["step"] for r in scen_rows if r["impaired"]})
+        impaired_steps = sorted({int(r["step"]) for r in scen_rows if str(r["impaired"]).lower() == "true"})
         if impaired_steps:
             ax.axvspan(min(impaired_steps), max(impaired_steps), color="red", alpha=0.10, label="Impairment Window")
 
+        max_step = 0
         for pol in POLICIES:
-            color, ls, label = policy_styles[pol]
+            color, ls, marker, msize, zord, label = policy_styles[pol]
             pol_rows = [r for r in scen_rows if r["policy"] == pol]
             by_step: Dict[int, List[float]] = {}
             for r in pol_rows:
-                val = r["packet_loss_pct"] if scen in ("packet_loss", "link_outage") else r["avg_rtt_ms"]
-                if val is not None:
-                    by_step.setdefault(r["step"], []).append(float(val))
+                raw_val = r["packet_loss_pct"] if scen in ("packet_loss", "link_outage") else r["avg_rtt_ms"]
+                if raw_val not in (None, "", "None"):
+                    step_i = int(r["step"])
+                    max_step = max(max_step, step_i)
+                    by_step.setdefault(step_i, []).append(float(raw_val))
             if by_step:
                 xs = sorted(by_step.keys())
                 ys = [mean(by_step[s]) for s in xs]
-                ax.plot(xs, ys, color=color, linestyle=ls, linewidth=2.6, marker="o", markersize=5, label=label)
+                sds = [stdev(by_step[s]) if len(by_step[s]) > 1 else 0.0 for s in xs]
+                ax.plot(
+                    xs, ys, color=color, linestyle=ls, linewidth=2.6,
+                    marker=marker, markersize=msize, zorder=zord, label=label,
+                )
+                if any(sd > 0.0 for sd in sds):
+                    low = [max(0.0, y - sd) for y, sd in zip(ys, sds)]
+                    high = [y + sd for y, sd in zip(ys, sds)]
+                    ax.fill_between(xs, low, high, color=color, alpha=0.14, zorder=zord - 1)
 
         ylabel = "Packet Loss (%)" if scen in ("packet_loss", "link_outage") else "Average RTT (ms)"
-        ax.set_xlabel("Probe Interval Step", fontsize=15, fontweight="bold")
-        ax.set_ylabel(ylabel, fontsize=15, fontweight="bold")
-        ax.set_title(f"{SCENARIOS[scen]['label']} ({tag})", fontsize=17, fontweight="bold", pad=10)
+        ax.set_xlabel("Probe Interval Step", fontsize=15, fontweight="bold", labelpad=8)
+        ax.set_ylabel(ylabel, fontsize=15, fontweight="bold", labelpad=8)
+        ax.set_xticks(range(0, max_step + 1, 2))
         ax.tick_params(labelsize=13)
         ax.grid(True, alpha=0.35)
-        ax.legend(fontsize=12, loc="upper right")
+
+        # Place legend cleanly OUTSIDE above the axes so it never covers any curve
+        ax.legend(
+            fontsize=12.5,
+            loc="lower center",
+            bbox_to_anchor=(0.5, 1.02),
+            ncol=2,
+            frameon=True,
+            facecolor="white",
+            framealpha=0.95,
+        )
+        fig.suptitle(
+            f"{SCENARIOS[scen]['label']} ({tag})",
+            fontsize=17,
+            fontweight="bold",
+            y=1.03,
+        )
         fig.tight_layout()
         out_path = output_dir / f"sdn_{mode}_{scen}.png"
         fig.savefig(out_path, dpi=300, bbox_inches="tight")

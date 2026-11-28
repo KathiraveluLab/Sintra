@@ -55,7 +55,8 @@ class RegionalMetricsPlotter:
                 
                 plt.axhline(y=5, color='orange', linestyle='--', linewidth=2, alpha=0.8, label='5% threshold')
                 plt.axhline(y=10, color='red', linestyle='--', linewidth=2, alpha=0.8, label='10% threshold')
-                plt.legend(fontsize=13, loc='lower right')
+                plt.legend(fontsize=13, loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=2, frameon=True)
+                plt.title('Regional Packet Loss Comparison', fontsize=18, fontweight='bold', pad=38)
                 logger.info(f"Created packet loss plot for {len(regions)} regions")
         
         plt.grid(True, alpha=0.3)
@@ -113,7 +114,8 @@ class RegionalMetricsPlotter:
                 
                 plt.axhline(y=20, color='orange', linestyle='--', linewidth=2, alpha=0.8, label='20ms threshold')
                 plt.axhline(y=50, color='red', linestyle='--', linewidth=2, alpha=0.8, label='50ms threshold')
-                plt.legend(fontsize=13, loc='upper right')
+                plt.legend(fontsize=13, loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=2, frameon=True)
+                plt.title('Regional Jitter Analysis', fontsize=18, fontweight='bold', pad=38)
                 logger.info(f"Created jitter plot for {len(regions)} regions")
         
         plt.grid(True, alpha=0.3)
@@ -172,7 +174,8 @@ class RegionalMetricsPlotter:
                 
                 plt.axhline(y=100, color='orange', linestyle='--', linewidth=2, alpha=0.8, label='100ms threshold')
                 plt.axhline(y=200, color='red', linestyle='--', linewidth=2, alpha=0.8, label='200ms threshold')
-                plt.legend(fontsize=13, loc='upper right')
+                plt.legend(fontsize=13, loc='lower center', bbox_to_anchor=(0.5, 1.02), ncol=2, frameon=True)
+                plt.title('Per-Probe Latency Distribution (Grouped by Region)', fontsize=18, fontweight='bold', pad=38)
                 logger.info(f"Created distribution plot for {len(all_data)} probes")
         
         plt.grid(True, alpha=0.3)
