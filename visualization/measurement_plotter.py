@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Dict, List, Any
 from statistics import median, mean, stdev
 from collections import defaultdict
+from datetime import datetime, timezone
 import pandas as pd
 from measurement_client.logger import logger
 
@@ -42,9 +43,10 @@ class MeasurementPlotter:
         if ping_data:
             logger.info(f"Generating ping performance plots for {len(ping_data)} countries...")
             self._plot_median_latency_by_country(ping_data)
+            self._plot_latency_time_series_by_region(ping_data)
             self._plot_packet_loss_by_country(ping_data)
             self._plot_jitter_by_country(ping_data)
-            plot_count += 3
+            plot_count += 4
         else:
             logger.warning("No valid ping data found")
         
@@ -145,7 +147,9 @@ class MeasurementPlotter:
             "avg_latency": avg_latency,
             "packet_loss": packet_loss,
             "jitter": jitter,
-            "rtts": rtts
+            "rtts": rtts,
+            "timestamp": result.get("timestamp"),
+            "samples": result.get("samples", [])
         }
     
     def _extract_traceroute_data(self, result: Dict, measurement_id: str) -> Dict:
@@ -294,6 +298,76 @@ class MeasurementPlotter:
         plt.savefig(self.output_dir / "measurement_median_latency_by_country.png", dpi=300, bbox_inches='tight')
         plt.close()
         logger.info("Created median latency by country plot")
+
+    @staticmethod
+    def _parse_timestamp(ts: Any):
+        if ts is None:
+            return None
+        try:
+            if isinstance(ts, (int, float)):
+                return datetime.fromtimestamp(ts, tz=timezone.utc)
+            if isinstance(ts, str):
+                return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except (ValueError, OSError, TypeError):
+            return None
+        return None
+
+    def _plot_latency_time_series_by_region(self, regional_data: Dict[str, List[Dict]]):
+        """Generate a Matplotlib time-series analysis of latency across geographical regions."""
+        plt.figure(figsize=(14, 8))
+        plotted_regions = 0
+
+        for country, probes in sorted(regional_data.items()):
+            time_buckets = defaultdict(list)
+            for probe in probes:
+                samples = probe.get("samples") or []
+                if samples:
+                    for sample in samples:
+                        dt = self._parse_timestamp(sample.get("timestamp"))
+                        rtt = sample.get("avg_rtt")
+                        if dt is not None and rtt is not None:
+                            time_buckets[dt].append(float(rtt))
+                else:
+                    dt = self._parse_timestamp(probe.get("timestamp"))
+                    rtt = probe.get("avg_latency")
+                    if dt is not None and rtt is not None:
+                        time_buckets[dt].append(float(rtt))
+
+            if time_buckets:
+                sorted_times = sorted(time_buckets.keys())
+                median_rtts = [median(time_buckets[t]) for t in sorted_times]
+                plt.plot(
+                    sorted_times,
+                    median_rtts,
+                    marker='o',
+                    linewidth=2,
+                    markersize=5,
+                    alpha=0.85,
+                    label=f"{country} ({len(probes)} probes)",
+                )
+                plotted_regions += 1
+
+        if plotted_regions == 0:
+            plt.text(
+                0.5, 0.5,
+                'No timestamped latency data available for time-series analysis',
+                transform=plt.gca().transAxes, ha='center', va='center', fontsize=14,
+            )
+            plt.title('Regional Latency Time-Series Analysis - No Data')
+        else:
+            plt.xlabel('Timestamp (UTC)')
+            plt.ylabel('Median Latency (ms)')
+            plt.title(f'Regional Latency Time-Series Analysis ({plotted_regions} regions)')
+            plt.axhline(y=100, color='orange', linestyle='--', alpha=0.6, label='100ms threshold')
+            plt.axhline(y=200, color='red', linestyle='--', alpha=0.6, label='200ms threshold')
+            plt.xticks(rotation=45, ha='right')
+            plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
+
+        plt.grid(True, alpha=0.3)
+        plt.tight_layout()
+        plt.savefig(self.output_dir / "measurement_latency_timeseries_by_region.png", dpi=300, bbox_inches='tight')
+        plt.close()
+        logger.info(f"Created latency time-series plot across {plotted_regions} regions")
     
     def _plot_packet_loss_by_country(self, regional_data: Dict[str, List[Dict]]):
         plt.figure(figsize=(14, 8))

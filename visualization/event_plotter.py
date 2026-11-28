@@ -107,6 +107,10 @@ class EventPlotter:
                 'path_flapping': '#8844ff',
                 'jitter_spike': '#ffcc00',
                 'unreachable_host': '#cc0000',
+                'geo_anomaly': '#009999',
+                'outlier_probe_latency': '#ff7f50',
+                'outlier_probe_loss': '#a0522d',
+                'correlated_routing_event': '#003399',
                 'regional_high_latency': '#ff6666',
                 'regional_packet_loss': '#ffaa44',
                 'regional_performance_outlier': '#ff00ff'

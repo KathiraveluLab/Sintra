@@ -6,9 +6,11 @@
     "jitter_spike_ms": 15.0,
     "outlier_factor": 2.0,
     "geo_anomaly_margin_ms": 50.0,
-    "path_flapping_window": 3
+    "path_flapping_window": 3,
+    "route_change_jaccard_threshold": 1.0
   },
   "target_thresholds": {},
+  "target_coordinates": {},
   "detection": {
     "enable_outlier_detection": true,
     "enable_geo_anomaly_detection": true,

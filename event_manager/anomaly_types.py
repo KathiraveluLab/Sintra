@@ -15,7 +15,7 @@ ANOMALY_TYPES = {
         "latency_related": False
     },
     "route_change": {
-        "description": "Traceroute path is different than baseline path (hop IPs or count changed)",
+        "description": "Traceroute path differs from baseline path (hop comparison and Jaccard similarity)",
         "measurement_type": ["traceroute"],
         "latency_related": False
     },

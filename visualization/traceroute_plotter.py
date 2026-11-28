@@ -5,10 +5,23 @@ from pathlib import Path
 from typing import Dict, List, Any
 from collections import defaultdict
 import hashlib
-from datetime import datetime
+from datetime import datetime, timezone
 from measurement_client.logger import logger
 
 class TraceroutePlotter:
+    
+    @staticmethod
+    def _parse_timestamp(ts: Any):
+        if ts is None:
+            return None
+        try:
+            if isinstance(ts, (int, float)):
+                return datetime.fromtimestamp(ts, tz=timezone.utc)
+            if isinstance(ts, str):
+                return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        except (ValueError, OSError, TypeError):
+            return None
+        return None
     
     def __init__(self, output_dir: str = "visualization/plots"):
         self.output_dir = Path(output_dir)
@@ -64,36 +77,44 @@ class TraceroutePlotter:
                     
                     probe_id = result.get("probe_id")
                     country = result.get("probe_country", "Unknown")
-                    hops = result.get("hops", [])
-                    hops_count = result.get("hops_count", 0)
-                    timestamp = result.get("timestamp")
+                    samples = result.get("traceroute_samples")
+                    if isinstance(samples, list) and samples:
+                        entries_to_add = [
+                            (s.get("hops", []), s.get("hops_count", len(s.get("hops", []))), s.get("timestamp"))
+                            for s in samples if isinstance(s, dict)
+                        ]
+                    else:
+                        entries_to_add = [
+                            (result.get("hops", []), result.get("hops_count", 0), result.get("timestamp"))
+                        ]
                     
-                    if not hops or hops_count == 0:
-                        continue
-                    
-                    route_hash = self._calculate_route_hash(hops)
-                    hop_ips = self._extract_hop_ips(hops)
-                    
-                    traceroute_entry = {
-                        "measurement_id": measurement_id,
-                        "target": target,
-                        "probe_id": probe_id,
-                        "country": country,
-                        "hops_count": hops_count,
-                        "route_hash": route_hash,
-                        "hop_ips": hop_ips,
-                        "timestamp": timestamp,
-                        "hops_raw": hops
-                    }
-                    
-                    traceroute_data[target].append(traceroute_entry)
+                    for hops, hops_count, timestamp in entries_to_add:
+                        if not hops or hops_count == 0:
+                            continue
+                        
+                        route_hash = self._calculate_route_hash(hops)
+                        hop_ips = self._extract_hop_ips(hops)
+                        
+                        traceroute_entry = {
+                            "measurement_id": measurement_id,
+                            "target": target,
+                            "probe_id": probe_id,
+                            "country": country,
+                            "hops_count": hops_count,
+                            "route_hash": route_hash,
+                            "hop_ips": hop_ips,
+                            "timestamp": timestamp,
+                            "hops_raw": hops
+                        }
+                        
+                        traceroute_data[target].append(traceroute_entry)
                     
             except Exception as e:
                 logger.error(f"Error processing {json_file}: {e}")
                 continue
         
         for target, entries in traceroute_data.items():
-            entries.sort(key=lambda x: x["timestamp"] or 0)
+            entries.sort(key=lambda x: (self._parse_timestamp(x["timestamp"]) or datetime.min.replace(tzinfo=timezone.utc)))
             logger.info(f"Target {target}: {len(entries)} traceroute entries")
         
         return dict(traceroute_data)
@@ -144,8 +165,9 @@ class TraceroutePlotter:
                 hop_counts = []
                 
                 for entry in probe_entries:
-                    if entry["timestamp"]:
-                        timestamps.append(datetime.fromtimestamp(entry["timestamp"]))
+                    dt = self._parse_timestamp(entry["timestamp"])
+                    if dt is not None:
+                        timestamps.append(dt)
                         hop_counts.append(entry["hops_count"])
                 
                 if timestamps and hop_counts:
@@ -202,8 +224,9 @@ class TraceroutePlotter:
                 current_route_id = 0
                 
                 for entry in probe_entries:
-                    if entry["timestamp"]:
-                        timestamps.append(datetime.fromtimestamp(entry["timestamp"]))
+                    dt = self._parse_timestamp(entry["timestamp"])
+                    if dt is not None:
+                        timestamps.append(dt)
                         route_hash = entry["route_hash"]
                         
                         if route_hash not in route_hash_to_id:

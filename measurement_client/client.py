@@ -1,5 +1,6 @@
 import os
 import json
+import math
 import yaml
 import argparse
 from datetime import datetime, timedelta, timezone
@@ -373,9 +374,23 @@ class SintraMeasurementClient:
             }
             
             # Apply fetch settings if available
+            result_limit = None
             if hasattr(self, 'fetch_config') and self.fetch_config:
-                fetch_settings = self.fetch_config.get('fetch_settings', {})
+                fetch_settings = self.fetch_config.get('fetch_settings', {}) or {}
                 
+                if 'format' in fetch_settings:
+                    requested_format = str(fetch_settings['format']).lower()
+                    if requested_format == 'json':
+                        kwargs['format'] = 'json'
+                    else:
+                        logger.warning(f"Unsupported fetch format '{requested_format}', falling back to 'json'")
+                if 'limit' in fetch_settings and fetch_settings['limit'] is not None:
+                    try:
+                        parsed_limit = int(fetch_settings['limit'])
+                        if parsed_limit > 0:
+                            result_limit = parsed_limit
+                    except (TypeError, ValueError):
+                        logger.warning(f"Invalid fetch_settings.limit '{fetch_settings['limit']}', ignoring")
                 if 'start_time' in fetch_settings:
                     kwargs['start'] = fetch_settings['start_time']
                 if 'stop_time' in fetch_settings:
@@ -401,6 +416,13 @@ class SintraMeasurementClient:
                 if not results:
                     logger.warning(f"No results returned for measurement {measurement_id}")
                     return False
+                
+                if result_limit is not None and len(results) > result_limit:
+                    logger.info(
+                        f"Applying fetch_settings.limit={result_limit} "
+                        f"(truncating from {len(results)} raw results)"
+                    )
+                    results = results[:result_limit]
                 
                 logger.info(f"Retrieved {len(results)} raw results for measurement {measurement_id}")
                 
@@ -517,6 +539,12 @@ class SintraMeasurementClient:
                 country = probe_info.get("country", "Unknown")
                 country_code = probe_info.get("country_code")
                 
+                probe_lat = probe_info.get("latitude")
+                probe_lon = probe_info.get("longitude")
+                target_lat = measurement_info.get("target_latitude")
+                target_lon = measurement_info.get("target_longitude")
+                distance_km = self._calculate_distance_km(probe_lat, probe_lon, target_lat, target_lon)
+                
                 probe_results[probe_id] = {
                     "measurement_type": measurement_type,
                     "measurement_id": measurement_id,
@@ -524,12 +552,13 @@ class SintraMeasurementClient:
                     "probe_country": country,
                     "probe_country_code": country_code,
                     "probe_asn": probe_info.get("asn"),
-                    "probe_latitude": probe_info.get("latitude"),
-                    "probe_longitude": probe_info.get("longitude"),
+                    "probe_latitude": probe_lat,
+                    "probe_longitude": probe_lon,
+                    "distance_km": round(distance_km, 2) if distance_km is not None else None,
                     "source_address": result.get("from"),
                     "target_address": result.get("dst_addr"),
                     "target_name": result.get("dst_name"),
-                    "timestamp": datetime.utcfromtimestamp(result.get("timestamp", 0)).isoformat() if result.get("timestamp") else None,
+                    "timestamp": datetime.fromtimestamp(result.get("timestamp", 0), tz=timezone.utc).isoformat().replace("+00:00", "Z") if result.get("timestamp") else None,
                     "firmware_version": result.get("fw"),
                     "protocol": result.get("proto", "ICMP"),
                     "address_family": result.get("af", 4)
@@ -538,15 +567,20 @@ class SintraMeasurementClient:
                 # Initialize measurement-specific fields
                 if measurement_type == "ping":
                     probe_results[probe_id].update({
-                        "latency_stats": {"rtts": [], "avg": None, "min": None, "max": None},
-                        "packet_loss_percentage": 0,
+                        "latency_stats": {
+                            "rtts": [], "avg": None, "min": None, "max": None,
+                            "median": None, "p95": None, "p99": None
+                        },
+                        "samples": [],
+                        "packet_loss_percentage": 0.0,
                         "packets_sent": 0,
                         "packets_received": 0
                     })
                 elif measurement_type == "traceroute":
                     probe_results[probe_id].update({
                         "hops": [],
-                        "hops_count": 0
+                        "hops_count": 0,
+                        "traceroute_samples": []
                     })
 
             # Process measurement data
@@ -611,37 +645,95 @@ class SintraMeasurementClient:
         
         return probe_info_cache
 
+    @staticmethod
+    def _calculate_distance_km(lat1, lon1, lat2, lon2) -> Optional[float]:
+        """Calculate Haversine great-circle distance in km between two points."""
+        if any(v is None for v in (lat1, lon1, lat2, lon2)):
+            return None
+        phi1 = math.radians(float(lat1))
+        phi2 = math.radians(float(lat2))
+        dphi = math.radians(float(lat2) - float(lat1))
+        dlambda = math.radians(float(lon2) - float(lon1))
+        a = math.sin(dphi / 2.0) ** 2 + math.cos(phi1) * math.cos(phi2) * math.sin(dlambda / 2.0) ** 2
+        return 6371.0 * 2.0 * math.atan2(math.sqrt(a), math.sqrt(1.0 - a))
+
+    @staticmethod
+    def _calculate_percentile(values: List[float], percentile: float) -> Optional[float]:
+        """Calculate linear-interpolated percentile (0-100)."""
+        if not values:
+            return None
+        ordered = sorted(float(v) for v in values)
+        if len(ordered) == 1:
+            return ordered[0]
+        rank = (percentile / 100.0) * (len(ordered) - 1)
+        lower = int(math.floor(rank))
+        upper = int(math.ceil(rank))
+        if lower == upper:
+            return ordered[lower]
+        return ordered[lower] + (rank - lower) * (ordered[upper] - ordered[lower])
+
     def _process_ping_data(self, result: Dict, probe_result: Dict) -> None:
-        """Process ping data for a single result."""
+        """Process ping data for a single result round and preserve time-series samples."""
         ping_results = result.get("result", [])
         rtts = [r.get("rtt") for r in ping_results if r.get("rtt") is not None]
         
-        probe_result["latency_stats"]["rtts"].extend(rtts)
-        probe_result["packets_sent"] += len(ping_results)
-        probe_result["packets_received"] += len(rtts)
+        round_sent = len(ping_results)
+        round_received = len(rtts)
+        round_lost = max(round_sent - round_received, 0)
         
-        # Calculate packet loss
-        loss_count = len([r for r in ping_results if r.get("x")])
+        probe_result["latency_stats"]["rtts"].extend(rtts)
+        probe_result["packets_sent"] += round_sent
+        probe_result["packets_received"] += round_received
+        
+        # Record per-round time-series sample for temporal latency analysis
+        probe_result.setdefault("samples", []).append({
+            "timestamp": result.get("timestamp"),
+            "avg_rtt": mean(rtts) if rtts else None,
+            "min_rtt": min(rtts) if rtts else None,
+            "max_rtt": max(rtts) if rtts else None,
+            "packet_loss_percentage": (round_lost / round_sent) * 100.0 if round_sent > 0 else 0.0
+        })
+        
+        # Update cumulative packet loss across all rounds
         if probe_result["packets_sent"] > 0:
-            probe_result["packet_loss_percentage"] = (loss_count / probe_result["packets_sent"]) * 100
+            total_lost = max(probe_result["packets_sent"] - probe_result["packets_received"], 0)
+            probe_result["packet_loss_percentage"] = (total_lost / probe_result["packets_sent"]) * 100.0
 
     def _process_traceroute_data(self, result: Dict, probe_result: Dict) -> None:
-        """Process traceroute data for a single result."""
+        """Process traceroute data for a single result and preserve per-round history."""
         hops = result.get("result", [])
         probe_result["hops"] = hops
         probe_result["hops_count"] = len(hops)
+        probe_result.setdefault("traceroute_samples", []).append({
+            "timestamp": result.get("timestamp"),
+            "hops": hops,
+            "hops_count": len(hops)
+        })
 
     def _finalize_ping_stats(self, probe_result: Dict) -> None:
-        """Finalize ping statistics for a probe."""
+        """Finalize ping statistics (including median, p95, p99, and cumulative packet loss)."""
         rtts = probe_result["latency_stats"]["rtts"]
         if rtts:
             probe_result["latency_stats"]["avg"] = mean(rtts)
             probe_result["latency_stats"]["min"] = min(rtts)
             probe_result["latency_stats"]["max"] = max(rtts)
+            probe_result["latency_stats"]["median"] = median(rtts)
+            probe_result["latency_stats"]["p95"] = self._calculate_percentile(rtts, 95)
+            probe_result["latency_stats"]["p99"] = self._calculate_percentile(rtts, 99)
         else:
             probe_result["latency_stats"]["avg"] = None
             probe_result["latency_stats"]["min"] = None
             probe_result["latency_stats"]["max"] = None
+            probe_result["latency_stats"]["median"] = None
+            probe_result["latency_stats"]["p95"] = None
+            probe_result["latency_stats"]["p99"] = None
+        
+        if probe_result.get("packets_sent", 0) > 0:
+            total_lost = max(probe_result["packets_sent"] - probe_result.get("packets_received", 0), 0)
+            probe_result["packet_loss_percentage"] = (total_lost / probe_result["packets_sent"]) * 100.0
+        
+        if probe_result.get("samples"):
+            probe_result["samples"].sort(key=lambda s: s.get("timestamp") or 0)
 
     def _compute_regional_analysis(self, regional_data: Dict[str, List[Dict]]) -> Dict[str, Any]:
         """Compute comprehensive regional analysis."""
@@ -687,6 +779,8 @@ class SintraMeasurementClient:
                         "mean_latency": float(mean(latencies)),
                         "min_latency": float(min(latencies)),
                         "max_latency": float(max(latencies)),
+                        "p95_latency": float(self._calculate_percentile(latencies, 95) or 0.0),
+                        "p99_latency": float(self._calculate_percentile(latencies, 99) or 0.0),
                         "avg_packet_loss": float(mean(packet_losses)),
                         "max_packet_loss": float(max(packet_losses)),
                         "avg_jitter": float(mean(jitters)) if jitters else 0.0,

@@ -33,6 +33,10 @@ class AnomalySummaryPlotter:
                     'path_flapping': 'purple',
                     'jitter_spike': 'yellow',
                     'unreachable_host': 'darkred',
+                    'geo_anomaly': 'teal',
+                    'outlier_probe_latency': 'coral',
+                    'outlier_probe_loss': 'sienna',
+                    'correlated_routing_event': 'navy',
                     'regional_high_latency': 'crimson',
                     'regional_packet_loss': 'darkorange',
                     'regional_performance_outlier': 'magenta'

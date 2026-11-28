@@ -94,8 +94,18 @@ def create_parser():
             help='Show alerts for specific measurement ID only'
         )
     
-    # Plots command
+    # Plots commands
     plots_parser = subparsers.add_parser('plots', help='Generate visualization plots for all measurements')
+    plots_parser.add_argument(
+        '--mode',
+        choices=['regional', 'comprehensive', 'all'],
+        default='regional',
+        help='Plot generation mode: regional (default), comprehensive (measurement/traceroute/event), or all'
+    )
+    subparsers.add_parser(
+        'plot',
+        help='Generate comprehensive measurement, time-series, traceroute, and anomaly plots'
+    )
     
     # Status command
     status_parser = subparsers.add_parser('status', help='Show current status of Sintra measurements and alerts')
@@ -357,17 +367,7 @@ def handle_plots_command(args):
     """Handle the plots command for generating visualizations."""
     try:
         logger.info("=== Generating Visualization Plots ===")
-        
-        # Import here to avoid requiring matplotlib if not using plots
-        try:
-            from visualization.plotter import SintraPlotter
-        except ImportError as e:
-            logger.error("Failed to import plotting dependencies. Please install matplotlib and seaborn:")
-            logger.error("pip install matplotlib seaborn")
-            return
-        
-        # Initialize plotter
-        plotter = SintraPlotter()
+        mode = getattr(args, 'mode', 'regional')
         
         # Check if results exist
         results_dir = Path("measurement_client/results/fetched_measurements")
@@ -376,8 +376,19 @@ def handle_plots_command(args):
             logger.error("No measurement results found. Please run 'sintra fetch' first.")
             return
         
-        # Generate plots for all measurements
-        plotter.plot_all_measurements()
+        if mode in ('regional', 'all'):
+            # Import here to avoid requiring matplotlib if not using plots
+            try:
+                from visualization.plotter import SintraPlotter
+            except ImportError:
+                logger.error("Failed to import plotting dependencies. Please install matplotlib and seaborn:")
+                logger.error("pip install matplotlib seaborn")
+                return
+            plotter = SintraPlotter()
+            plotter.plot_all_measurements()
+        
+        if mode in ('comprehensive', 'all'):
+            plot()
         
         logger.info("Plot generation complete. Check 'visualization/plots/' directory for results.")
         
@@ -564,12 +575,12 @@ def main():
         
         elif args.command == 'plots':
             handle_plots_command(args)
+
+        elif args.command == 'plot':
+            plot()
         
         elif args.command == 'status':
             handle_status_command(args)
-            
-        elif len(sys.argv) > 1 and sys.argv[1] == "plot":
-            plot()
         else:
             parser.print_help()
             sys.exit(1)

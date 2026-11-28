@@ -9,7 +9,13 @@ from typing import Dict, List, Any, Optional, Tuple
 from urllib.parse import urlparse
 from measurement_client.logger import logger
 from .anomaly_types import ANOMALY_TYPES
-from .anomaly_utils import calculate_jitter, is_outlier, geo_anomaly_check
+from .anomaly_utils import (
+    calculate_jitter,
+    is_outlier,
+    geo_anomaly_check,
+    calculate_distance_km,
+    calculate_jaccard_similarity,
+)
 
 
 class SintraEventManager:
@@ -60,8 +66,11 @@ class SintraEventManager:
                 "jitter_spike_ms": 15.0,
                 "outlier_factor": 2.0,
                 "geo_anomaly_margin_ms": 50.0,
-                "path_flapping_window": 3
+                "path_flapping_window": 3,
+                "route_change_jaccard_threshold": 1.0
             },
+            "target_thresholds": {},
+            "target_coordinates": {},
             "detection": {
                 "enable_outlier_detection": True,
                 "enable_geo_anomaly_detection": True,
@@ -150,6 +159,7 @@ class SintraEventManager:
         # Run different anomaly detection methods
         events.extend(self._detect_outlier_anomalies(probe_data, timestamp))
         events.extend(self._detect_threshold_anomalies(probe_data, timestamp))
+        events.extend(self._detect_geo_anomalies(probe_data, timestamp))
         events.extend(self._detect_routing_anomalies(probe_data, timestamp))
         
         # Cross-correlate ping and traceroute anomalies using a snapshot
@@ -166,10 +176,15 @@ class SintraEventManager:
             'losses': {},
             'jitters': {},
             'targets': {},
+            'countries': {},
             'traceroute_hops': {},
             'baseline_rtts': {},
-            'baseline_hops': {}
+            'baseline_hops': {},
+            'route_histories': {}
         }
+        
+        default_target_lat = data.get("target_latitude")
+        default_target_lon = data.get("target_longitude")
         
         for result in data.get("results", []):
             probe_id = result.get("probe_id")
@@ -179,20 +194,28 @@ class SintraEventManager:
             # (RIPE Atlas may return probe IDs as int or str)
             probe_id = str(probe_id)
                 
-            target_addr = result.get("target_address") or result.get("target")
+            target_addr = result.get("target_address") or result.get("target") or data.get("target")
             probe_data['targets'][probe_id] = target_addr
+            if result.get("probe_country"):
+                probe_data['countries'][probe_id] = result.get("probe_country")
             
             measurement_type = result.get("measurement_type")
             
             if measurement_type == "ping":
-                self._process_ping_data(result, probe_id, target_addr, probe_data)
+                self._process_ping_data(
+                    result, probe_id, target_addr, probe_data,
+                    default_target_lat=default_target_lat,
+                    default_target_lon=default_target_lon
+                )
             elif measurement_type == "traceroute":
                 self._process_traceroute_data(result, probe_id, target_addr, probe_data)
                 
         return probe_data
 
     def _process_ping_data(self, result: Dict[str, Any], probe_id: str, 
-                          target_addr: str, probe_data: Dict[str, Any]) -> None:
+                          target_addr: str, probe_data: Dict[str, Any],
+                          default_target_lat: Optional[float] = None,
+                          default_target_lon: Optional[float] = None) -> None:
         latency_stats = result.get("latency_stats", {})
         latency = latency_stats.get("avg")
         loss = result.get("packet_loss_percentage")
@@ -201,21 +224,80 @@ class SintraEventManager:
         probe_data['latencies'][probe_id] = latency
         probe_data['losses'][probe_id] = loss
         probe_data['jitters'][probe_id] = calculate_jitter(rtts)
-        probe_data['distances'][probe_id] = result.get("distance_km")
+        
+        distance_km = result.get("distance_km")
+        if distance_km is None:
+            probe_lat = result.get("probe_latitude")
+            probe_lon = result.get("probe_longitude")
+            target_lat = result.get("target_latitude", default_target_lat)
+            target_lon = result.get("target_longitude", default_target_lon)
+            if target_lat is None or target_lon is None:
+                target_coords = self.config.get("target_coordinates", {}).get(target_addr, {})
+                if isinstance(target_coords, dict):
+                    target_lat = target_coords.get("latitude", target_lat)
+                    target_lon = target_coords.get("longitude", target_lon)
+            distance_km = calculate_distance_km(probe_lat, probe_lon, target_lat, target_lon)
+        probe_data['distances'][probe_id] = distance_km
         
         if self.config["detection"]["enable_adaptive_baseline"]:
             baseline_rtt = self._get_and_update_baseline_rtt(probe_id, target_addr, latency)
             probe_data['baseline_rtts'][probe_id] = baseline_rtt
 
+    @staticmethod
+    def _extract_hop_ips(hops: List[Any]) -> List[str]:
+        """Extract hop IP sequence from either simplified or RIPE Atlas traceroute hop records.
+        
+        Supports:
+        - Simplified format: [{"ip": "1.2.3.4"}, ...]
+        - RIPE Atlas format: [{"hop": 1, "result": [{"from": "1.2.3.4", "rtt": 1.2}, ...]}, ...]
+        - Plain IP strings: ["1.2.3.4", ...]
+        """
+        hop_ips: List[str] = []
+        for hop in hops or []:
+            if isinstance(hop, str):
+                if hop and hop != "*":
+                    hop_ips.append(hop)
+            elif isinstance(hop, dict):
+                if hop.get("ip"):
+                    hop_ips.append(str(hop["ip"]))
+                elif hop.get("from"):
+                    hop_ips.append(str(hop["from"]))
+                elif isinstance(hop.get("result"), list):
+                    for response in hop["result"]:
+                        if isinstance(response, dict) and response.get("from"):
+                            hop_ips.append(str(response["from"]))
+                            break
+        return hop_ips
+
     def _process_traceroute_data(self, result: Dict[str, Any], probe_id: str,
                                 target_addr: str, probe_data: Dict[str, Any]) -> None:
-        hops = result.get("hops", [])
-        hop_ips = [h.get("ip") for h in hops if h.get("ip")]
+        samples = result.get("traceroute_samples")
+        sample_hop_sequences: List[List[str]] = []
+        if isinstance(samples, list) and samples:
+            for sample in samples:
+                if isinstance(sample, dict):
+                    seq = self._extract_hop_ips(sample.get("hops", []))
+                    if seq:
+                        sample_hop_sequences.append(seq)
         
-        probe_data['traceroute_hops'][probe_id] = hop_ips
+        if not sample_hop_sequences:
+            hop_ips = self._extract_hop_ips(result.get("hops", []))
+            if hop_ips:
+                sample_hop_sequences.append(hop_ips)
         
-        previous_hops = self._get_and_update_baseline_hops(probe_id, target_addr, hop_ips)
+        if not sample_hop_sequences:
+            probe_data['traceroute_hops'][probe_id] = []
+            probe_data['baseline_hops'][probe_id] = None
+            return
+        
+        previous_hops = None
+        for seq in sample_hop_sequences:
+            previous_hops = self._get_and_update_baseline_hops(probe_id, target_addr, seq)
+        
+        probe_data['traceroute_hops'][probe_id] = sample_hop_sequences[-1]
         probe_data['baseline_hops'][probe_id] = previous_hops
+        route_key = f"{probe_id}_{target_addr}"
+        probe_data['route_histories'][probe_id] = list(self.route_history.get(route_key, []))
 
     @staticmethod
     def _sanitize_filename(value: str) -> str:
@@ -300,7 +382,7 @@ class SintraEventManager:
 
     def _get_and_update_baseline_hops(self, probe_id: str, target_addr: str,
                                      current_hops: List[str]) -> Optional[List[str]]:
-        """Get previous traceroute hops and store current ones as the new baseline."""
+        """Get previous traceroute hops and persist current hops and route history."""
         if target_addr is None:
             logger.debug(f"Skipping baseline hops for probe {probe_id}: target_addr is None")
             return None
@@ -308,26 +390,41 @@ class SintraEventManager:
         safe_probe = self._sanitize_filename(probe_id)
         safe_target = self._sanitize_filename(target_addr)
         baseline_file = self.baseline_dir / f"traceroute_{safe_probe}_{safe_target}.json"
+        route_key = f"{probe_id}_{target_addr}"
         previous_hops = None
+        flapping_window = max(int(self.config["thresholds"].get("path_flapping_window", 3)), 1)
+        max_history = max(flapping_window * 3, 10)
+        history: List[List[str]] = list(self.route_history.get(route_key, []))
         
         try:
             if baseline_file.exists():
                 with open(baseline_file, "r") as bf:
                     baseline_data = json.load(bf)
                     previous_hops = baseline_data.get("hop_ips")
+                    disk_history = baseline_data.get("route_history")
+                    if isinstance(disk_history, list) and disk_history:
+                        history = disk_history
+                    elif previous_hops and not history:
+                        history = [previous_hops]
+            
+            if current_hops:
+                history.append(list(current_hops))
+                if len(history) > max_history:
+                    history = history[-max_history:]
+                self.route_history[route_key] = history
             
             # Write atomically via temp file to prevent corruption on interruption
             fd, tmp_path = tempfile.mkstemp(dir=str(self.baseline_dir), suffix=".tmp")
             try:
                 with os.fdopen(fd, "w") as bf:
-                    json.dump({"hop_ips": current_hops}, bf)
+                    json.dump({"hop_ips": current_hops, "route_history": history}, bf)
                 os.replace(tmp_path, str(baseline_file))
             except Exception:
-                    try:
-                        os.unlink(tmp_path)
-                    except FileNotFoundError:
-                        pass
-                    raise
+                try:
+                    os.unlink(tmp_path)
+                except FileNotFoundError:
+                    pass
+                raise
                 
         except (json.JSONDecodeError, IOError) as e:
             logger.warning(f"Failed to handle baseline hops for {probe_id}->{target_addr}: {e}")
@@ -350,7 +447,8 @@ class SintraEventManager:
                 events.append(self._create_event(
                     timestamp, "outlier_probe_latency", probe_id,
                     probe_data['targets'][probe_id], "ping_rtt_ms",
-                    latency, None, "ms", "warning"
+                    latency, None, "ms", "warning",
+                    probe_country=probe_data['countries'].get(probe_id)
                 ))
         
         for probe_id, loss in probe_data['losses'].items():
@@ -360,7 +458,8 @@ class SintraEventManager:
                 events.append(self._create_event(
                     timestamp, "outlier_probe_loss", probe_id,
                     probe_data['targets'][probe_id], "ping_loss_pct",
-                    loss, None, "%", "warning"
+                    loss, None, "%", "warning",
+                    probe_country=probe_data['countries'].get(probe_id)
                 ))
         
         return events
@@ -373,6 +472,7 @@ class SintraEventManager:
         
         for probe_id in probe_data['targets']:
             target_addr = probe_data['targets'][probe_id]
+            probe_country = probe_data['countries'].get(probe_id)
             
             # Use per-target threshold if configured, otherwise fall back to global
             target_config = target_thresholds.get(target_addr, {})
@@ -390,7 +490,7 @@ class SintraEventManager:
                     spike_event = self._create_event(
                         timestamp, "latency_spike", probe_id, target_addr,
                         "ping_rtt_ms", latency, latency_threshold,
-                        "ms", "warning"
+                        "ms", "warning", probe_country=probe_country
                     )
                 
                 # Multiplier-based threshold (overrides static if also triggered)
@@ -404,7 +504,7 @@ class SintraEventManager:
                     spike_event = self._create_event(
                         timestamp, "latency_spike", probe_id, target_addr,
                         "ping_rtt_ms", latency, multiplier_threshold,
-                        "ms", "warning"
+                        "ms", "warning", probe_country=probe_country
                     )
                 
                 if spike_event:
@@ -416,14 +516,15 @@ class SintraEventManager:
                 events.append(self._create_event(
                     timestamp, "packet_loss", probe_id, target_addr,
                     "ping_loss_pct", loss, thresholds["packet_loss_percentage"],
-                    "%", "warning"
+                    "%", "warning", probe_country=probe_country
                 ))
             
             # Unreachable host detection
             if loss is not None and loss == 100.0:
                 events.append(self._create_event(
                     timestamp, "unreachable_host", probe_id, target_addr,
-                    "reachability", 0, 1, "reachable_flag", "critical"
+                    "reachability", 0, 1, "reachable_flag", "critical",
+                    probe_country=probe_country
                 ))
             
             # Jitter spike detection
@@ -432,48 +533,117 @@ class SintraEventManager:
                 events.append(self._create_event(
                     timestamp, "jitter_spike", probe_id, target_addr,
                     "ping_jitter_ms", jitter, thresholds["jitter_spike_ms"],
-                    "ms", "warning"
+                    "ms", "warning", probe_country=probe_country
                 ))
+        
+        return events
+
+    def _detect_geo_anomalies(self, probe_data: Dict[str, Any],
+                             timestamp: str) -> List[Dict[str, Any]]:
+        """Detect geographic anomalies where a distant probe outperforms a closer probe.
+        
+        Compares probes measuring the same target using great-circle distance (km)
+        and average RTT (ms). Emits at most one geo_anomaly event per distant
+        outperforming probe, recording the strongest margin violation.
+        """
+        events = []
+        if not self.config["detection"].get("enable_geo_anomaly_detection", True):
+            return events
+        
+        margin_ms = self.config["thresholds"].get("geo_anomaly_margin_ms", 50.0)
+        
+        # Group probes with valid distance and latency by target
+        probes_by_target: Dict[Any, List[Tuple[str, float, float]]] = {}
+        for probe_id, lat in probe_data['latencies'].items():
+            dist = probe_data['distances'].get(probe_id)
+            if lat is not None and dist is not None:
+                target_addr = probe_data['targets'].get(probe_id)
+                probes_by_target.setdefault(target_addr, []).append((probe_id, float(dist), float(lat)))
+        
+        for target_addr, entries in probes_by_target.items():
+            if len(entries) < 2:
+                continue
+            for pid1, dist1, lat1 in entries:
+                best_violation = None
+                for pid2, dist2, lat2 in entries:
+                    if pid1 == pid2:
+                        continue
+                    if geo_anomaly_check(dist1, lat1, dist2, lat2, margin=margin_ms):
+                        diff = lat2 - lat1
+                        if best_violation is None or diff > best_violation[0]:
+                            best_violation = (diff, pid2, dist2, lat2)
+                if best_violation is not None:
+                    diff, near_pid, near_dist, near_lat = best_violation
+                    event = self._create_event(
+                        timestamp, "geo_anomaly", pid1, target_addr,
+                        "geo_latency_diff_ms", round(diff, 2), margin_ms,
+                        "ms", "warning",
+                        probe_country=probe_data['countries'].get(pid1)
+                    )
+                    event.update({
+                        "far_probe_distance_km": round(dist1, 2),
+                        "far_probe_rtt_ms": round(lat1, 2),
+                        "near_probe_id": near_pid,
+                        "near_probe_distance_km": round(near_dist, 2),
+                        "near_probe_rtt_ms": round(near_lat, 2),
+                    })
+                    events.append(event)
         
         return events
 
     def _detect_routing_anomalies(self, probe_data: Dict[str, Any],
                                  timestamp: str) -> List[Dict[str, Any]]:
         events = []
+        thresholds = self.config["thresholds"]
+        jaccard_threshold = float(thresholds.get("route_change_jaccard_threshold", 1.0))
+        flapping_window = int(thresholds.get("path_flapping_window", 3))
         
         for probe_id in probe_data['targets']:
             target_addr = probe_data['targets'][probe_id]
+            probe_country = probe_data['countries'].get(probe_id)
             
-            # Route change detection
+            # Route change detection using hop sequence comparison + Jaccard similarity
             current_hops = probe_data['traceroute_hops'].get(probe_id)
             previous_hops = probe_data['baseline_hops'].get(probe_id)
             
-            if previous_hops and current_hops and previous_hops != current_hops:
-                event = self._create_event(
-                    timestamp, "route_change", probe_id, target_addr,
-                    "traceroute_hops", None, None, "", "warning"
+            if previous_hops and current_hops:
+                jaccard_sim = calculate_jaccard_similarity(previous_hops, current_hops)
+                route_changed = (
+                    (previous_hops != current_hops)
+                    if jaccard_threshold >= 1.0
+                    else (jaccard_sim < jaccard_threshold)
                 )
-                event.update({
-                    "previous_hops": previous_hops,
-                    "current_hops": current_hops
-                })
-                events.append(event)
+                if route_changed:
+                    event = self._create_event(
+                        timestamp, "route_change", probe_id, target_addr,
+                        "traceroute_hops", round(jaccard_sim, 4), jaccard_threshold,
+                        "jaccard_similarity", "warning", probe_country=probe_country
+                    )
+                    event.update({
+                        "previous_hops": previous_hops,
+                        "current_hops": current_hops,
+                        "jaccard_similarity": round(jaccard_sim, 4),
+                        "hop_count_delta": len(current_hops) - len(previous_hops),
+                    })
+                    events.append(event)
             
-            # Path flapping detection
+            # Path flapping detection over persisted + in-memory route history
             if current_hops:
                 route_key = f"{probe_id}_{target_addr}"
-                self.route_history.setdefault(route_key, [])
-                self.route_history[route_key].append(current_hops)
-                
-                flapping_window = self.config["thresholds"]["path_flapping_window"]
-                if len(self.route_history[route_key]) > flapping_window:
-                    recent_routes = self.route_history[route_key][-flapping_window:]
-                    unique_routes = set(tuple(r) for r in recent_routes)
-                    
-                    if len(unique_routes) > 1:
+                history = probe_data.get('route_histories', {}).get(
+                    probe_id, self.route_history.get(route_key, [])
+                )
+                if len(history) >= flapping_window:
+                    recent_routes = history[-flapping_window:]
+                    transitions = sum(
+                        1 for i in range(1, len(recent_routes))
+                        if recent_routes[i] != recent_routes[i - 1]
+                    )
+                    if transitions >= 2:
                         event = self._create_event(
                             timestamp, "path_flapping", probe_id, target_addr,
-                            "traceroute_hops", None, None, "", "warning"
+                            "traceroute_hops", transitions, 2, "route_changes",
+                            "warning", probe_country=probe_country
                         )
                         event["routes"] = recent_routes
                         events.append(event)
@@ -501,9 +671,12 @@ class SintraEventManager:
             key = (str(event.get('probe_id', '')), str(event.get('target', '')))
             if key not in groups:
                 groups[key] = {"anomalies": [], "event_refs": [], 
-                              "probe_id": key[0], "target": key[1]}
+                              "probe_id": key[0], "target": key[1],
+                              "probe_country": event.get("probe_country")}
             groups[key]["anomalies"].append(event.get("anomaly"))
             groups[key]["event_refs"].append(event)
+            if not groups[key].get("probe_country") and event.get("probe_country"):
+                groups[key]["probe_country"] = event.get("probe_country")
         
         # Check for latency_spike + route_change in the same group
         for key, group in groups.items():
@@ -514,7 +687,8 @@ class SintraEventManager:
                 
                 correlated_event = self._create_event(
                     timestamp, "correlated_routing_event", probe_id, target,
-                    "correlation", None, None, "", "warning"
+                    "correlation", None, None, "", "warning",
+                    probe_country=group.get("probe_country")
                 )
                 correlated_event["description"] = (
                     "Latency spike likely caused by route change detected on the same probe"
@@ -527,8 +701,9 @@ class SintraEventManager:
 
     def _create_event(self, timestamp: str, anomaly: str, probe_id: str,
                      target: str, metric: str, value: Any, threshold: Any,
-                     units: str, severity: str) -> Dict[str, Any]:
-        return {
+                     units: str, severity: str,
+                     probe_country: Optional[str] = None) -> Dict[str, Any]:
+        event = {
             "timestamp": timestamp,
             "anomaly": anomaly,
             "probe_id": probe_id,
@@ -539,6 +714,9 @@ class SintraEventManager:
             "units": units,
             "severity": severity
         }
+        if probe_country is not None:
+            event["probe_country"] = probe_country
+        return event
 
     def save_events(self, measurement_id: str, events: List[Dict[str, Any]]) -> None:
 
