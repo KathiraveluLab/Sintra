@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import time
 import tempfile
 import requests
 from pathlib import Path
@@ -46,6 +47,10 @@ class SintraEventManager:
         # Route history for path flapping detection
         self.route_history: Dict[str, List[List[str]]] = {}
         
+        # Closed-loop controller hysteresis & cooldown state (keyed by target)
+        self._last_controller_dispatch: Dict[str, float] = {}
+        self._consecutive_anomaly_counts: Dict[str, int] = {}
+        
         logger.info(f"SintraEventManager initialized with results dir: {self.fetched_results_dir}")
 
     def _ensure_directories(self) -> None:
@@ -75,6 +80,15 @@ class SintraEventManager:
                 "enable_outlier_detection": True,
                 "enable_geo_anomaly_detection": True,
                 "enable_adaptive_baseline": True
+            },
+            "controller": {
+                "enabled": False,
+                "url": "http://127.0.0.1:8080/sintra/events",
+                "timeout_seconds": 5,
+                "cooldown_seconds": 15.0,
+                "min_consecutive_anomalies": 1,
+                "min_severity": "warning",
+                "allow_insecure_http": False
             }
         }
         
@@ -120,9 +134,10 @@ class SintraEventManager:
                 
         logger.info(f"Analysis complete: {processed_count} files processed, {error_count} errors")
         
-        # Send webhook alerts after all analysis is complete (not during save)
+        # Send webhook alerts and SDN controller notifications after analysis completes
         for measurement_id, events in all_results:
             self.send_webhook_alert(measurement_id, events)
+            self.send_to_controller(measurement_id, events)
 
     def _analyze_single_file(self, result_file: Path) -> Tuple[Optional[str], List[Dict[str, Any]]]:
         """Analyze a single measurement file. Returns (measurement_id, events)."""
@@ -803,11 +818,199 @@ class SintraEventManager:
             description = ANOMALY_TYPES.get(anomaly, {}).get("description", "Unknown anomaly type")
             logger.info(f"    {anomaly}: {count} events - {description}")
 
-    def send_to_controller(self, measurement_id: str) -> None:
+    def send_to_controller(
+        self,
+        measurement_id: str,
+        events: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        """Dispatch detected anomalies to an SDN controller (e.g., POX northbound REST API).
+        
+        Applies per-target consecutive-window hysteresis and cooldown damping to
+        prevent route oscillation during transient spikes. Critical reachability
+        failures ('unreachable_host') bypass cooldown for immediate failover.
         """
-        Send events to POX controller (to be implemented).
-        """
-        logger.info(f"Sending events for measurement {measurement_id} to POX controller (placeholder)")
+        controller_cfg = self.config.get("controller", {})
+        if not controller_cfg.get("enabled", False):
+            logger.debug("SDN controller dispatch is disabled")
+            return {"sent": False, "reason": "disabled"}
+
+        controller_url = controller_cfg.get("url", "").strip()
+        if not controller_url:
+            logger.warning("Controller URL is not configured")
+            return {"sent": False, "reason": "missing_url"}
+
+        parsed = urlparse(controller_url)
+        if parsed.scheme not in ("https", "http"):
+            logger.error(f"Invalid controller URL scheme '{parsed.scheme}': {controller_url}")
+            return {"sent": False, "reason": "invalid_scheme"}
+
+        is_loopback = parsed.hostname in ("127.0.0.1", "localhost", "::1")
+        if parsed.scheme == "http" and not is_loopback and not controller_cfg.get("allow_insecure_http", False):
+            logger.error(
+                "Non-loopback controller URL uses plain HTTP and insecure delivery is disabled. "
+                "Use https:// or set controller.allow_insecure_http=true to opt in."
+            )
+            return {"sent": False, "reason": "insecure_http_blocked"}
+
+        # Load events from disk if not passed directly
+        if events is None:
+            event_file = self.event_results_dir / f"{measurement_id}.json"
+            if not event_file.exists():
+                logger.warning(f"No event file found for measurement {measurement_id}: {event_file}")
+                return {"sent": False, "reason": "no_event_file"}
+            try:
+                with open(event_file, "r") as f:
+                    events = json.load(f).get("events", [])
+            except (json.JSONDecodeError, IOError) as e:
+                logger.error(f"Failed to read events for controller dispatch: {e}")
+                return {"sent": False, "reason": "read_error"}
+
+        min_severity = str(controller_cfg.get("min_severity", "warning")).lower()
+        allowed_severities = {"critical"} if min_severity == "critical" else {"critical", "warning"}
+        eligible_events = [e for e in events if e.get("severity") in allowed_severities]
+
+        if not eligible_events:
+            # Clean measurement round resets consecutive anomaly counters
+            self._consecutive_anomaly_counts.clear()
+            logger.debug(f"No controller-actionable events for measurement {measurement_id}")
+            return {"sent": False, "reason": "no_eligible_events"}
+
+        # Group eligible events by target for hysteresis and cooldown evaluation
+        by_target: Dict[str, List[Dict[str, Any]]] = {}
+        for event in eligible_events:
+            target = str(event.get("target") or "unknown")
+            by_target.setdefault(target, []).append(event)
+
+        # Reset counters for targets absent from current anomalies
+        for tracked_target in list(self._consecutive_anomaly_counts.keys()):
+            if tracked_target not in by_target:
+                self._consecutive_anomaly_counts[tracked_target] = 0
+
+        min_consecutive = max(int(controller_cfg.get("min_consecutive_anomalies", 1)), 1)
+        cooldown_seconds = max(float(controller_cfg.get("cooldown_seconds", 15.0)), 0.0)
+        now = time.monotonic()
+
+        dispatched_events: List[Dict[str, Any]] = []
+        dispatched_targets: List[str] = []
+        suppressed_targets: Dict[str, str] = {}
+
+        for target, target_events in by_target.items():
+            count = self._consecutive_anomaly_counts.get(target, 0) + 1
+            self._consecutive_anomaly_counts[target] = count
+
+            has_critical_outage = any(
+                e.get("anomaly") == "unreachable_host" or e.get("severity") == "critical"
+                for e in target_events
+            )
+
+            if not has_critical_outage and count < min_consecutive:
+                suppressed_targets[target] = f"hysteresis_pending ({count}/{min_consecutive})"
+                continue
+
+            last_sent = self._last_controller_dispatch.get(target)
+            if not has_critical_outage and last_sent is not None and (now - last_sent) < cooldown_seconds:
+                remaining = round(cooldown_seconds - (now - last_sent), 2)
+                suppressed_targets[target] = f"cooldown_active ({remaining}s remaining)"
+                continue
+
+            dispatched_targets.append(target)
+            dispatched_events.extend(target_events)
+
+        if not dispatched_events:
+            logger.info(
+                f"Controller dispatch suppressed for measurement {measurement_id}: {suppressed_targets}"
+            )
+            return {
+                "sent": False,
+                "reason": "suppressed_by_damping",
+                "suppressed_targets": suppressed_targets,
+            }
+
+        reroute_triggers = {
+            "latency_spike", "packet_loss", "unreachable_host", "jitter_spike",
+            "path_flapping", "correlated_routing_event", "geo_anomaly", "route_change",
+        }
+        action = (
+            "reroute"
+            if any(e.get("anomaly") in reroute_triggers for e in dispatched_events)
+            else "monitor"
+        )
+
+        payload = {
+            "measurement_id": str(measurement_id),
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "action": action,
+            "targets": dispatched_targets,
+            "total_anomalies": len(dispatched_events),
+            "anomalies": [
+                {
+                    "type": e.get("anomaly"),
+                    "probe_id": e.get("probe_id"),
+                    "probe_country": e.get("probe_country"),
+                    "target": e.get("target"),
+                    "severity": e.get("severity"),
+                    "metric": e.get("metric"),
+                    "value": e.get("value"),
+                    "threshold": e.get("threshold"),
+                    "units": e.get("units", ""),
+                }
+                for e in dispatched_events
+            ],
+        }
+
+        timeout = controller_cfg.get("timeout_seconds", 5)
+        t0 = time.perf_counter()
+        try:
+            response = requests.post(
+                controller_url,
+                json=payload,
+                timeout=timeout,
+                headers={"Content-Type": "application/json"},
+            )
+            dispatch_ms = round((time.perf_counter() - t0) * 1000.0, 3)
+
+            if response.status_code < 300:
+                for target in dispatched_targets:
+                    self._last_controller_dispatch[target] = now
+                    self._consecutive_anomaly_counts[target] = 0
+                try:
+                    resp_body = response.json()
+                except ValueError:
+                    resp_body = response.text[:200]
+                logger.info(
+                    f"Controller notified for measurement {measurement_id} "
+                    f"(action={action}, targets={dispatched_targets}, {dispatch_ms:.2f}ms)"
+                )
+                return {
+                    "sent": True,
+                    "status_code": response.status_code,
+                    "action": action,
+                    "dispatched_targets": dispatched_targets,
+                    "suppressed_targets": suppressed_targets,
+                    "dispatch_latency_ms": dispatch_ms,
+                    "response": resp_body,
+                }
+
+            logger.warning(
+                f"Controller returned status {response.status_code} for measurement {measurement_id}: "
+                f"{response.text[:200]}"
+            )
+            return {
+                "sent": False,
+                "reason": f"http_{response.status_code}",
+                "status_code": response.status_code,
+                "dispatch_latency_ms": dispatch_ms,
+            }
+
+        except requests.RequestException as e:
+            dispatch_ms = round((time.perf_counter() - t0) * 1000.0, 3)
+            logger.error(f"Failed to notify SDN controller for measurement {measurement_id}: {e}")
+            return {
+                "sent": False,
+                "reason": "request_exception",
+                "error": str(e),
+                "dispatch_latency_ms": dispatch_ms,
+            }
 
     def send_webhook_alert(self, measurement_id: str, events: List[Dict[str, Any]]) -> None:
         """Send alert notifications to a configured webhook URL.

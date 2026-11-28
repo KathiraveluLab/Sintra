@@ -3,6 +3,7 @@ import sys
 import json
 import logging
 import re
+import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from measurement_client.client import SintraMeasurementClient
@@ -109,6 +110,45 @@ def create_parser():
     
     # Status command
     status_parser = subparsers.add_parser('status', help='Show current status of Sintra measurements and alerts')
+
+    # Continuous monitoring / closed-loop daemon command
+    monitor_parser = subparsers.add_parser(
+        'monitor',
+        help='Continuously analyze measurement files and notify configured webhooks/SDN controller'
+    )
+    monitor_parser.add_argument(
+        '--config',
+        default='event_manager/config.json',
+        help='Event manager configuration file path (default: event_manager/config.json)'
+    )
+    monitor_parser.add_argument(
+        '--results-dir',
+        default='measurement_client/results/fetched_measurements',
+        help='Directory containing measurement_*_result.json files to watch'
+    )
+    monitor_parser.add_argument(
+        '--interval',
+        type=float,
+        default=5.0,
+        help='Polling interval in seconds (default: 5.0)'
+    )
+    monitor_parser.add_argument(
+        '--iterations',
+        type=int,
+        default=0,
+        help='Maximum polling iterations (0 = run continuously until interrupted)'
+    )
+    monitor_parser.add_argument(
+        '--controller-url',
+        type=str,
+        default=None,
+        help='Override SDN controller URL and enable controller dispatch'
+    )
+    monitor_parser.add_argument(
+        '--always-analyze',
+        action='store_true',
+        help='Re-analyze files on every cycle even if file mtime has not changed'
+    )
     
     return parser
 
@@ -546,6 +586,47 @@ def handle_status_command(args):
         raise
 
 
+def handle_monitor_command(args):
+    """Run Sintra in a continuous monitoring and closed-loop controller dispatch loop."""
+    logger.info("=== Starting Sintra Continuous Monitor ===")
+    config_path = args.config if Path(args.config).exists() else None
+    event_manager = SintraEventManager(
+        fetched_results_dir=args.results_dir,
+        config_path=config_path,
+    )
+    if args.controller_url:
+        event_manager.config.setdefault("controller", {})
+        event_manager.config["controller"]["enabled"] = True
+        event_manager.config["controller"]["url"] = args.controller_url
+        logger.info(f"SDN controller dispatch enabled -> {args.controller_url}")
+
+    results_dir = Path(args.results_dir)
+    last_seen_mtimes = {}
+    iteration = 0
+
+    try:
+        while True:
+            iteration += 1
+            if results_dir.exists():
+                result_files = sorted(results_dir.glob("measurement_*_result.json"))
+                for result_file in result_files:
+                    mtime = result_file.stat().st_mtime
+                    if args.always_analyze or last_seen_mtimes.get(result_file) != mtime:
+                        last_seen_mtimes[result_file] = mtime
+                        measurement_id, events = event_manager._analyze_single_file(result_file)
+                        if measurement_id:
+                            if events:
+                                event_manager.send_webhook_alert(measurement_id, events)
+                            event_manager.send_to_controller(measurement_id, events)
+
+            if args.iterations > 0 and iteration >= args.iterations:
+                logger.info(f"Completed {iteration} monitor iteration(s)")
+                break
+            time.sleep(max(args.interval, 0.05))
+    except KeyboardInterrupt:
+        logger.info("Continuous monitor stopped by user")
+
+
 # Main entry point for the Sintra
 def main():
     parser = create_parser()
@@ -581,6 +662,9 @@ def main():
         
         elif args.command == 'status':
             handle_status_command(args)
+
+        elif args.command == 'monitor':
+            handle_monitor_command(args)
         else:
             parser.print_help()
             sys.exit(1)

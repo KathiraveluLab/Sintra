@@ -1,0 +1,34 @@
+{
+  "measurement_id": "mon_1",
+  "analysis_timestamp": "2026-11-28T03:31:13.372670Z",
+  "events": [
+    {
+      "timestamp": "2026-11-28T03:31:13.371716Z",
+      "anomaly": "latency_spike",
+      "probe_id": "h1",
+      "target": "10.0.0.2",
+      "metric": "ping_rtt_ms",
+      "value": 355.0,
+      "threshold": 250.0,
+      "units": "ms",
+      "severity": "warning",
+      "probe_country": "Emulated-AS1"
+    }
+  ],
+  "analysis": {
+    "per_probe": {
+      "h1": {
+        "target": "10.0.0.2",
+        "anomalies": [
+          "latency_spike"
+        ],
+        "anomaly_count": 1
+      }
+    },
+    "anomaly_summary": {
+      "latency_spike": 1
+    },
+    "total_anomalies": 1,
+    "unique_probes_affected": 1
+  }
+}

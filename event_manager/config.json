@@ -22,5 +22,14 @@
     "enabled": false,
     "url": "",
     "timeout_seconds": 10
+  },
+  "controller": {
+    "enabled": false,
+    "url": "http://127.0.0.1:8080/sintra/events",
+    "timeout_seconds": 5,
+    "cooldown_seconds": 15.0,
+    "min_consecutive_anomalies": 1,
+    "min_severity": "warning",
+    "allow_insecure_http": true
   }
 }
