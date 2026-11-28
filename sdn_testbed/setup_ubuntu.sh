@@ -20,6 +20,9 @@ else
     echo "POX already exists at ${POX_DIR}"
 fi
 
+# Register Sintra's POX controller at the top level of POX's ext/ directory
+ln -sfn "${REPO_DIR}/sdn_testbed/pox_sintra_controller.py" "${POX_DIR}/ext/pox_sintra_controller.py"
+
 echo "=== Installing Sintra Python dependencies into ${VENV_DIR} (with system site-packages for Mininet) ==="
 python3 -m venv --system-site-packages "${VENV_DIR}"
 "${VENV_DIR}/bin/pip" install --upgrade pip
@@ -28,7 +31,7 @@ python3 -m venv --system-site-packages "${VENV_DIR}"
 echo ""
 echo "=== Setup Complete ==="
 echo "Terminal 1 (Start POX controller):"
-echo "  cd ${REPO_DIR} && PYTHONPATH=${REPO_DIR} python3 ${POX_DIR}/pox.py log.level --INFO sdn_testbed.pox_sintra_controller --rest_port=8080 --policy=sintra --cooldown=5"
+echo "  cd ${REPO_DIR} && PYTHONPATH=${REPO_DIR} python3 ${POX_DIR}/pox.py log.level --INFO pox_sintra_controller --rest_port=8080 --policy=sintra --cooldown=5"
 echo ""
 echo "Terminal 2 (Quick 1-trial sanity check):"
 echo "  cd ${REPO_DIR} && sudo ${VENV_DIR}/bin/python -m sdn_testbed.run_experiments --mode mininet --trials 1 --scenarios latency_spike jitter_spike"

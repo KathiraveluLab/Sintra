@@ -28,9 +28,10 @@ bash sdn_testbed/setup_ubuntu.sh
 
 **Terminal 1 — Start the POX controller:**
 ```bash
+ln -sfn "$(pwd)/sdn_testbed/pox_sintra_controller.py" ~/pox/ext/pox_sintra_controller.py
 PYTHONPATH=$(pwd) python3 ~/pox/pox.py \
     log.level --INFO \
-    sdn_testbed.pox_sintra_controller \
+    pox_sintra_controller \
     --rest_port=8080 --policy=sintra --cooldown=5
 ```
 
