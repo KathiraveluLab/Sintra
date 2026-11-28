@@ -469,13 +469,14 @@ class NorthboundRESTServer:
                     self._send_json(200, decision)
                 elif self.path == "/sintra/reset":
                     policy = data.get("policy")
+                    prev_path = list(engine.active_path)
                     try:
                         status = engine.reset(policy=policy)
                     except ValueError as exc:
                         self._send_json(400, {"error": str(exc)})
                         return
                     if on_reroute is not None:
-                        on_reroute([], status["active_path"], {"reason": "reset"})
+                        on_reroute(prev_path, status["active_path"], {"reason": "reset"})
                     self._send_json(200, status)
                 elif self.path == "/sintra/policy":
                     policy = data.get("policy")

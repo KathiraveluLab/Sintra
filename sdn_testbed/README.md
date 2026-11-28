@@ -36,12 +36,12 @@ PYTHONPATH=$(pwd) python3 ~/pox/pox.py \
 
 **Terminal 2 — Run the automated Mininet experiments:**
 ```bash
-sudo .venv/bin/python sdn_testbed/run_experiments.py --mode mininet --trials 5
+sudo .venv/bin/python -m sdn_testbed.run_experiments --mode mininet --trials 5
 ```
 
 To replay an actual RIPE Atlas measurement JSON fetched by Sintra onto Path A:
 ```bash
-sudo .venv/bin/python sdn_testbed/run_experiments.py \
+sudo .venv/bin/python -m sdn_testbed.run_experiments \
     --mode mininet --trials 5 \
     --ripe-trace measurement_client/results/fetched_measurements/measurement_<ID>_result.json
 ```
@@ -49,7 +49,7 @@ sudo .venv/bin/python sdn_testbed/run_experiments.py \
 ## Smoke Testing the Control-Loop Pipeline Without Mininet (Windows / CI)
 
 ```bash
-.venv/bin/python sdn_testbed/run_experiments.py --mode simulate --trials 1 --scenarios latency_spike jitter_spike
+.venv/bin/python -m sdn_testbed.run_experiments --mode simulate --trials 1 --scenarios latency_spike jitter_spike
 ```
 
 > **Note:** `--mode simulate` exercises the real `SintraEventManager`, HTTP REST dispatch, `NorthboundRESTServer`, and `AdaptivePathEngine` with synthetic telemetry solely for pipeline verification. For paper evaluation results, run `--mode mininet` on Linux with Open vSwitch and POX.
