@@ -17,6 +17,13 @@ class MeasurementPlotter:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         plt.style.use('default')
+        plt.rcParams.update({
+            'axes.titlesize': 16,
+            'axes.labelsize': 14,
+            'xtick.labelsize': 12,
+            'ytick.labelsize': 12,
+            'legend.fontsize': 12,
+        })
         sns.set_palette("husl")
         logger.info(f"MeasurementPlotter initialized with output dir: {self.output_dir}")
         

@@ -10,7 +10,7 @@ class RegionalMetricsPlotter:
     
     @staticmethod
     def plot_packet_loss(results: List[Dict], output_dir: Path) -> None:
-        plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(10, 6))
         
         regional_losses = defaultdict(list)
         for result in results:
@@ -44,17 +44,18 @@ class RegionalMetricsPlotter:
                 
                 for bar, loss in zip(bars, avg_losses):
                     if loss > 0.1:
-                        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.2,
-                                f'{loss:.1f}%', ha='center', va='bottom', fontweight='bold')
+                        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.25,
+                                f'{loss:.1f}%', ha='center', va='bottom', fontsize=14, fontweight='bold')
                 
-                plt.xlabel('Region')
-                plt.ylabel('Average Packet Loss (%)')
-                plt.title('Regional Packet Loss Comparison')
-                plt.xticks(range(len(regions)), regions, rotation=45, ha='right')
+                plt.xlabel('Region', fontsize=15, fontweight='bold')
+                plt.ylabel('Average Packet Loss (%)', fontsize=15, fontweight='bold')
+                plt.title('Regional Packet Loss Comparison', fontsize=18, fontweight='bold', pad=12)
+                plt.xticks(range(len(regions)), regions, rotation=35, ha='right', fontsize=13)
+                plt.yticks(fontsize=13)
                 
-                plt.axhline(y=5, color='orange', linestyle='--', alpha=0.7, label='5% threshold')
-                plt.axhline(y=10, color='red', linestyle='--', alpha=0.7, label='10% threshold')
-                plt.legend()
+                plt.axhline(y=5, color='orange', linestyle='--', linewidth=2, alpha=0.8, label='5% threshold')
+                plt.axhline(y=10, color='red', linestyle='--', linewidth=2, alpha=0.8, label='10% threshold')
+                plt.legend(fontsize=13, loc='lower right')
                 logger.info(f"Created packet loss plot for {len(regions)} regions")
         
         plt.grid(True, alpha=0.3)
@@ -64,7 +65,7 @@ class RegionalMetricsPlotter:
 
     @staticmethod
     def plot_jitter(results: List[Dict], output_dir: Path) -> None:
-        plt.figure(figsize=(12, 8))
+        plt.figure(figsize=(10, 6))
         
         regional_jitters = defaultdict(list)
         for result in results:
@@ -100,17 +101,19 @@ class RegionalMetricsPlotter:
                 
                 for bar, jitter in zip(bars, avg_jitters):
                     if jitter > 1:
-                        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1,
-                                f'{jitter:.1f}ms', ha='center', va='bottom', fontweight='bold')
+                        plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 1.2,
+                                f'{jitter:.1f}ms', ha='center', va='bottom', fontsize=13, fontweight='bold')
                 
-                plt.xlabel('Region')
-                plt.ylabel('Average Jitter (ms)')
-                plt.title('Regional Jitter Analysis')
-                plt.xticks(range(len(regions)), regions, rotation=45, ha='right')
+                plt.xlabel('Region', fontsize=15, fontweight='bold')
+                plt.ylabel('Average Jitter (ms)', fontsize=15, fontweight='bold')
+                plt.title('Regional Jitter Analysis', fontsize=18, fontweight='bold', pad=12)
+                plt.xticks(range(len(regions)), regions, rotation=35, ha='right', fontsize=13)
+                plt.yticks(fontsize=13)
+                plt.ylim(top=max(avg_jitters) * 1.15)
                 
-                plt.axhline(y=20, color='orange', linestyle='--', alpha=0.7, label='20ms threshold')
-                plt.axhline(y=50, color='red', linestyle='--', alpha=0.7, label='50ms threshold')
-                plt.legend()
+                plt.axhline(y=20, color='orange', linestyle='--', linewidth=2, alpha=0.8, label='20ms threshold')
+                plt.axhline(y=50, color='red', linestyle='--', linewidth=2, alpha=0.8, label='50ms threshold')
+                plt.legend(fontsize=13, loc='upper right')
                 logger.info(f"Created jitter plot for {len(regions)} regions")
         
         plt.grid(True, alpha=0.3)
@@ -162,13 +165,14 @@ class RegionalMetricsPlotter:
                     patch.set_facecolor(color)
                     patch.set_alpha(0.7)
                 
-                plt.ylabel('Latency (ms)')
-                plt.title('Per-Probe Latency Distribution (Grouped by Region)')
-                plt.xticks(range(1, len(labels) + 1), labels, rotation=45, ha='right')
+                plt.ylabel('Latency (ms)', fontsize=16, fontweight='bold')
+                plt.title('Per-Probe Latency Distribution (Grouped by Region)', fontsize=18, fontweight='bold', pad=12)
+                plt.xticks(range(1, len(labels) + 1), labels, rotation=40, ha='right', fontsize=12)
+                plt.yticks(fontsize=13)
                 
-                plt.axhline(y=100, color='orange', linestyle='--', alpha=0.7, label='100ms threshold')
-                plt.axhline(y=200, color='red', linestyle='--', alpha=0.7, label='200ms threshold')
-                plt.legend()
+                plt.axhline(y=100, color='orange', linestyle='--', linewidth=2, alpha=0.8, label='100ms threshold')
+                plt.axhline(y=200, color='red', linestyle='--', linewidth=2, alpha=0.8, label='200ms threshold')
+                plt.legend(fontsize=13, loc='upper right')
                 logger.info(f"Created distribution plot for {len(all_data)} probes")
         
         plt.grid(True, alpha=0.3)

@@ -28,6 +28,13 @@ class TraceroutePlotter:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         
         plt.style.use('default')
+        plt.rcParams.update({
+            'axes.titlesize': 16,
+            'axes.labelsize': 14,
+            'xtick.labelsize': 12,
+            'ytick.labelsize': 12,
+            'legend.fontsize': 12,
+        })
         logger.info(f"TraceroutePlotter initialized with output dir: {self.output_dir}")
     
     def process_all_traceroute_files(self, results_dir: str = "measurement_client/results/fetched_measurements"):

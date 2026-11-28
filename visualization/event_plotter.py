@@ -18,6 +18,13 @@ class EventPlotter:
         
         # Set plotting style
         plt.style.use('default')
+        plt.rcParams.update({
+            'axes.titlesize': 16,
+            'axes.labelsize': 14,
+            'xtick.labelsize': 12,
+            'ytick.labelsize': 12,
+            'legend.fontsize': 12,
+        })
         sns.set_palette("husl")
         
         logger.info(f"EventPlotter initialized with output dir: {self.output_dir}")

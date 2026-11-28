@@ -8,7 +8,7 @@ class AnomalySummaryPlotter:
     
     @staticmethod
     def plot_anomaly_summary(events: List[Dict], output_dir: Path) -> None:
-        plt.figure(figsize=(12, 6))
+        plt.figure(figsize=(10, 5.5))
         
         if not events:
             plt.text(0.5, 0.5, 'No anomalies detected', 
@@ -46,13 +46,15 @@ class AnomalySummaryPlotter:
                 bars = plt.bar(anomaly_types, counts, color=colors, alpha=0.7)
                 
                 for bar, count in zip(bars, counts):
-                    plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.1,
-                            str(count), ha='center', va='bottom', fontweight='bold')
+                    plt.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.08,
+                            str(count), ha='center', va='bottom', fontsize=14, fontweight='bold')
                 
-                plt.xlabel('Anomaly Type')
-                plt.ylabel('Number of Events')
-                plt.title(f'Anomaly Type Summary ({sum(counts)} total events)')
-                plt.xticks(rotation=45, ha='right')
+                plt.xlabel('Anomaly Type', fontsize=15, fontweight='bold')
+                plt.ylabel('Number of Events', fontsize=15, fontweight='bold')
+                plt.title(f'Anomaly Type Summary ({sum(counts)} total events)', fontsize=18, fontweight='bold', pad=12)
+                plt.xticks(rotation=25, ha='right', fontsize=13)
+                plt.yticks(fontsize=13)
+                plt.ylim(top=max(counts) * 1.18)
                 logger.info(f"Created anomaly summary plot with {sum(counts)} total events")
             else:
                 plt.text(0.5, 0.5, 'No valid anomaly data found', 

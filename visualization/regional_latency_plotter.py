@@ -12,7 +12,7 @@ class RegionalLatencyPlotter:
     def plot_latency_trend(results: List[Dict], events: List[Dict], output_dir: Path) -> None:
         logger.info(f"Creating regional latency trend plot with {len(results)} results")
         
-        plt.figure(figsize=(14, 8))
+        plt.figure(figsize=(11, 6.5))
         
         regional_data = defaultdict(list)
         country_codes = set()
@@ -78,20 +78,24 @@ class RegionalLatencyPlotter:
                         plt.scatter(idx, median_latencies[idx], marker='x', s=300, 
                                   color='red', linewidth=4, label='Anomaly Detected' if region == list(anomaly_regions)[0] else "")
                 
-                plt.xlabel('Region (sorted by latency)')
-                plt.ylabel('Median Latency (ms)')
-                plt.title(f'Regional Latency Trend ({len(regions)} regions)')
-                plt.xticks(x_pos, regions, rotation=45, ha='right')
+                plt.xlabel('Region (sorted by latency)', fontsize=15, fontweight='bold')
+                plt.ylabel('Median Latency (ms)', fontsize=15, fontweight='bold')
+                plt.title(f'Regional Latency Trend ({len(regions)} regions)', fontsize=18, fontweight='bold', pad=12)
+                plt.xticks(x_pos, regions, rotation=35, ha='right', fontsize=13)
+                plt.yticks(fontsize=13)
                 plt.grid(True, alpha=0.3)
                 
-                plt.axhline(y=100, color='orange', linestyle='--', alpha=0.7, label='100ms threshold')
-                plt.axhline(y=200, color='red', linestyle='--', alpha=0.7, label='200ms threshold')
+                plt.axhline(y=100, color='orange', linestyle='--', linewidth=2, alpha=0.8, label='100ms threshold')
+                plt.axhline(y=200, color='red', linestyle='--', linewidth=2, alpha=0.8, label='200ms threshold')
                 
+                y_max = max(median_latencies)
+                plt.ylim(bottom=min(85, min(median_latencies) - 25), top=y_max * 1.16)
                 for i, (lat, probe_count) in enumerate(zip(median_latencies, probe_counts)):
-                    plt.annotate(f'{lat:.1f}ms\n({probe_count} probes)', (i, lat), textcoords="offset points", 
-                               xytext=(0,15), ha='center', fontsize=8)
+                    probe_label = "probe" if probe_count == 1 else "probes"
+                    plt.annotate(f'{lat:.1f}ms\n({probe_count} {probe_label})', (i, lat), textcoords="offset points", 
+                               xytext=(0, 14), ha='center', fontsize=11, fontweight='bold')
                 
-                plt.legend()
+                plt.legend(fontsize=13, loc='upper left')
                 logger.info(f"Successfully created regional latency trend plot with {len(regions)} regions")
             else:
                 plt.text(0.5, 0.5, 'No valid regions with latency data', 
